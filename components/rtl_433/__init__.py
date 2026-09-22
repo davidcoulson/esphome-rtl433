@@ -38,6 +38,7 @@ Rtl433Component = rtl_433_ns.class_("Rtl433Component", cg.Component)
 CONF_FREQUENCY = "frequency"
 CONF_DECODERS = "decoders"
 CONF_UNITS = "units"
+CONF_TASK_CORE = "task_core"
 
 
 def _known_decoders():
@@ -106,6 +107,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_PPM_ERROR, default=0): cv.int_range(min=-200, max=200),
             # Decoders for every band that doesn't list its own; omitted = rtl_433's default set
             cv.Optional(CONF_DECODERS): cv.ensure_list(_decoder),
+            # Core for rtl_433's decoding task; by default the one the ESPHome loop isn't on
+            cv.Optional(CONF_TASK_CORE): cv.int_range(min=0, max=1),
             # rtl_433 -C: native, si or customary units in the events
             cv.Optional(CONF_UNITS, default="si"): cv.one_of(
                 "native", "si", "customary", lower=True
@@ -159,6 +162,8 @@ async def to_code(config):
     await cg.register_component(var, config)
     for arg in _rtl433_args(config):
         cg.add(var.add_arg(arg))
+    if CONF_TASK_CORE in config:
+        cg.add(var.set_task_core(config[CONF_TASK_CORE]))
     # Decoder sets go straight to the port layer rather than as -R, so they can change on each hop
     default = config.get(CONF_DECODERS)
     for index, entry in enumerate(config[CONF_FREQUENCIES]):
@@ -171,8 +176,6 @@ async def to_code(config):
     add_idf_component(name="esp_rtl_sdr", repo=ESP_RTL_SDR_REPO, ref=ESP_RTL_SDR_REF)
     add_idf_component(name="rtl433_core", path=str(RTL433_CORE))
     esp32.include_builtin_idf_component("pthread")
-    # rtl_433's acquire thread is a pthread; its decoders need more than the 3 KB default
-    add_idf_sdkconfig_option("CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT", 16384)
     # Its sample buffers (15 x 256 KB) come from plain malloc(), so malloc must reach PSRAM
     add_idf_sdkconfig_option("CONFIG_SPIRAM_USE_MALLOC", True)
     # HTTP listener(s), Mongoose's internal socket pair, one WebSocket per Home Assistant hub, plus the API

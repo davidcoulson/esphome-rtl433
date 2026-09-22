@@ -14,6 +14,7 @@ namespace esphome::rtl_433 {
 class Rtl433Component : public Component {
  public:
   void add_arg(const char *arg) { this->args_.emplace_back(arg); }
+  void set_task_core(int core) { this->task_core_ = core; }
   void add_band_decoders(int band, const char *list) { this->band_decoders_.emplace_back(band, list); }
 
   void setup() override;
@@ -27,6 +28,8 @@ class Rtl433Component : public Component {
   std::vector<std::string> args_;
   std::vector<std::pair<int, std::string>> band_decoders_;
   TaskHandle_t task_{nullptr};
+  int task_core_{-1};  // -1: the core the ESPHome loop isn't on
+  int acquire_core_{0};
   bool started_{false};
 };
 
