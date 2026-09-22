@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import esphome.codegen as cg
-from esphome.components import esp32
+from esphome.components import esp32, sensor
 from esphome.components.esp32 import (
     VARIANT_ESP32P4,
     add_idf_component,
@@ -10,9 +10,17 @@ from esphome.components.esp32 import (
 )
 import esphome.config_validation as cv
 import esphome.final_validate as fv
-from esphome.const import CONF_ID, CONF_PORT
+from esphome.const import (
+    CONF_ID,
+    CONF_PORT,
+    ENTITY_CATEGORY_DIAGNOSTIC,
+    STATE_CLASS_MEASUREMENT,
+    STATE_CLASS_TOTAL_INCREASING,
+    UNIT_PERCENT,
+)
 
 DEPENDENCIES = ["network"]
+AUTO_LOAD = ["sensor"]
 CODEOWNERS = ["@davidcoulson"]
 
 CONF_FREQUENCIES = "frequencies"
@@ -32,13 +40,74 @@ USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 RTL433_CORE = Path(__file__).resolve().parents[2] / "idf" / "rtl433_core"
 
 rtl_433_ns = cg.esphome_ns.namespace("rtl_433")
-Rtl433Component = rtl_433_ns.class_("Rtl433Component", cg.Component)
+Rtl433Component = rtl_433_ns.class_("Rtl433Component", cg.PollingComponent)
 
 
 CONF_FREQUENCY = "frequency"
 CONF_DECODERS = "decoders"
 CONF_UNITS = "units"
 CONF_TASK_CORE = "task_core"
+CONF_TASK_PRIORITY = "task_priority"
+CONF_ACQUIRE_PRIORITY = "acquire_priority"
+CONF_USB_TASK_PRIORITY = "usb_task_priority"
+CONF_USB_BUFFER = "usb_buffer"
+CONF_DETECTOR = "detector"
+CONF_FSK_DETECTOR = "fsk_detector"
+CONF_LEVEL = "level"
+CONF_MIN_LEVEL = "min_level"
+CONF_MIN_SNR = "min_snr"
+CONF_AUTO_LEVEL = "auto_level"
+CONF_SQUELCH = "squelch"
+CONF_LEVEL_ESTIMATOR = "level_estimator"
+CONF_FM_FILTER = "fm_filter"
+CONF_BIAS_TEE = "bias_tee"
+CONF_DIGITAL_AGC = "digital_agc"
+CONF_FLEX_DECODERS = "flex_decoders"
+CONF_OUTPUTS = "outputs"
+CONF_REPORT_NOISE = "report_noise"
+CONF_HOP_ON_EVENT = "hop_on_event"
+CONF_TAGS = "tags"
+CONF_VERBOSITY = "verbosity"
+CONF_EFFECTIVE_SAMPLE_RATE = "effective_sample_rate"
+CONF_USB_OVERRUNS = "usb_overruns"
+CONF_DROPPED_SAMPLES = "dropped_samples"
+CONF_DECODED_EVENTS = "decoded_events"
+CONF_CPU_LOAD_CORE0 = "cpu_load_core0"
+CONF_CPU_LOAD_CORE1 = "cpu_load_core1"
+
+
+def _bytes(value):
+    # 1048576, "512KB", "1MB"
+    if isinstance(value, str):
+        v = value.strip().upper().replace(" ", "")
+        for suffix, mult in (("MB", 1 << 20), ("KB", 1 << 10), ("B", 1)):
+            if v.endswith(suffix):
+                return int(float(v[: -len(suffix)]) * mult)
+    return cv.int_(value)
+
+
+DETECTOR_SCHEMA = cv.Schema(
+    {
+        # -Y auto|classic|minmax: FSK pulse detector
+        cv.Optional(CONF_FSK_DETECTOR): cv.one_of("auto", "classic", "minmax", lower=True),
+        # -Y level=: fixed detection level in dB (-30 to -1); 0 = automatic
+        cv.Optional(CONF_LEVEL): cv.float_range(min=-30, max=0),
+        # -Y minlevel=: lowest level the automatic detection may go to (dB)
+        cv.Optional(CONF_MIN_LEVEL): cv.float_range(min=-99, max=-1),
+        # -Y minsnr=: minimum signal-to-noise ratio for a pulse (dB)
+        cv.Optional(CONF_MIN_SNR): cv.float_range(min=1, max=99),
+        # -Y autolevel: set min_level from the estimated noise floor (also feeds HA's noise sensor)
+        cv.Optional(CONF_AUTO_LEVEL): cv.boolean,
+        # -Y squelch: skip frames below the noise estimate, saving CPU
+        cv.Optional(CONF_SQUELCH): cv.boolean,
+        # -Y ampest|magest: amplitude or magnitude level estimator
+        cv.Optional(CONF_LEVEL_ESTIMATOR): cv.one_of("amplitude", "magnitude", lower=True),
+        # -Y filter=: FM low-pass cutoff to separate simultaneous transmissions (us 1-9999, Hz 10000+, or ratio)
+        cv.Optional(CONF_FM_FILTER): cv.string_strict,
+    }
+)
+
+_DIAG = {"entity_category": ENTITY_CATEGORY_DIAGNOSTIC}
 
 
 def _known_decoders():
@@ -113,10 +182,75 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_UNITS, default="si"): cv.one_of(
                 "native", "si", "customary", lower=True
             ),
+            # Pulse detector (-Y) settings
+            cv.Optional(CONF_DETECTOR, default={}): DETECTOR_SCHEMA,
+            # -t biastee / digital_agc: power an active antenna / the RTL2832's own AGC
+            cv.Optional(CONF_BIAS_TEE): cv.boolean,
+            cv.Optional(CONF_DIGITAL_AGC): cv.boolean,
+            # -X: flex decoders for devices rtl_433 doesn't know, e.g. "n=doorbell,m=OOK_PWM,s=400,l=1200,r=5000"
+            cv.Optional(CONF_FLEX_DECODERS, default=[]): cv.ensure_list(cv.string_strict),
+            # -F: more outputs besides the HTTP API, e.g. "mqtt://192.168.1.2:1883,retain=0" or "syslog:10.0.0.5:514"
+            cv.Optional(CONF_OUTPUTS, default=[]): cv.ensure_list(cv.string_strict),
+            # -M noise:<s>: report the noise level at this interval
+            cv.Optional(CONF_REPORT_NOISE): cv.positive_time_period_seconds,
+            # -E hop: move to the next frequency straight after a successful decode
+            cv.Optional(CONF_HOP_ON_EVENT, default=False): cv.boolean,
+            # -K key=value: extra fields on every event, e.g. {receiver: attic}
+            cv.Optional(CONF_TAGS, default={}): cv.Schema({cv.string_strict: cv.string_strict}),
+            # -v: rtl_433 log verbosity (0 = normal ... 4 = trace)
+            cv.Optional(CONF_VERBOSITY, default=0): cv.int_range(min=0, max=4),
+            # USB driver's sample ring (PSRAM). The default holds ~50-125 ms at 2 MS/s; a longer decode burst
+            # than that drops samples (see dropped_samples)
+            cv.Optional(CONF_USB_BUFFER): cv.All(_bytes, cv.int_range(min=64 << 10, max=8 << 20)),
+            # FreeRTOS priorities: rtl_433's decoding task, its USB acquire thread, the driver's USB task
+            # (0 = driver default)
+            cv.Optional(CONF_TASK_PRIORITY, default=5): cv.int_range(min=1, max=22),
+            cv.Optional(CONF_ACQUIRE_PRIORITY, default=6): cv.int_range(min=1, max=22),
+            cv.Optional(CONF_USB_TASK_PRIORITY, default=0): cv.int_range(min=0, max=22),
+            # Diagnostics
+            cv.Optional(CONF_EFFECTIVE_SAMPLE_RATE): sensor.sensor_schema(
+                unit_of_measurement="S/s",
+                icon="mdi:sine-wave",
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_MEASUREMENT,
+                **_DIAG,
+            ),
+            cv.Optional(CONF_USB_OVERRUNS): sensor.sensor_schema(
+                icon="mdi:usb",
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_TOTAL_INCREASING,
+                **_DIAG,
+            ),
+            cv.Optional(CONF_DROPPED_SAMPLES): sensor.sensor_schema(
+                icon="mdi:package-variant-remove",
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_TOTAL_INCREASING,
+                **_DIAG,
+            ),
+            cv.Optional(CONF_DECODED_EVENTS): sensor.sensor_schema(
+                icon="mdi:radio-tower",
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_TOTAL_INCREASING,
+                **_DIAG,
+            ),
+            cv.Optional(CONF_CPU_LOAD_CORE0): sensor.sensor_schema(
+                unit_of_measurement=UNIT_PERCENT,
+                icon="mdi:cpu-64-bit",
+                accuracy_decimals=1,
+                state_class=STATE_CLASS_MEASUREMENT,
+                **_DIAG,
+            ),
+            cv.Optional(CONF_CPU_LOAD_CORE1): sensor.sensor_schema(
+                unit_of_measurement=UNIT_PERCENT,
+                icon="mdi:cpu-64-bit",
+                accuracy_decimals=1,
+                state_class=STATE_CLASS_MEASUREMENT,
+                **_DIAG,
+            ),
             # Anything else rtl_433 accepts on its command line, e.g. ["-R", "40", "-M", "level"]
             cv.Optional(CONF_EXTRA_ARGS, default=[]): cv.ensure_list(cv.string_strict),
         }
-    ).extend(cv.COMPONENT_SCHEMA),
+    ).extend(cv.polling_component_schema("60s")),
     cv.only_on_esp32,
     _only_p4,
 )
@@ -154,6 +288,47 @@ def _rtl433_args(config):
     if config[CONF_PPM_ERROR]:
         args += ["-p", str(config[CONF_PPM_ERROR])]
     args += ["-C", config[CONF_UNITS]]
+
+    det = config[CONF_DETECTOR]
+    y = []
+    if CONF_FSK_DETECTOR in det:
+        y.append(det[CONF_FSK_DETECTOR])
+    if CONF_LEVEL in det:
+        y.append(f"level={det[CONF_LEVEL]:g}")
+    if CONF_MIN_LEVEL in det:
+        y.append(f"minlevel={det[CONF_MIN_LEVEL]:g}")
+    if CONF_MIN_SNR in det:
+        y.append(f"minsnr={det[CONF_MIN_SNR]:g}")
+    if det.get(CONF_AUTO_LEVEL):
+        y.append("autolevel")
+    if det.get(CONF_SQUELCH):
+        y.append("squelch")
+    if CONF_LEVEL_ESTIMATOR in det:
+        y.append("ampest" if det[CONF_LEVEL_ESTIMATOR] == "amplitude" else "magest")
+    if CONF_FM_FILTER in det:
+        y.append(f"filter={det[CONF_FM_FILTER]}")
+    for opt in y:
+        args += ["-Y", opt]
+
+    settings = []
+    if CONF_BIAS_TEE in config:
+        settings.append(f"biastee={int(config[CONF_BIAS_TEE])}")
+    if CONF_DIGITAL_AGC in config:
+        settings.append(f"digital_agc={int(config[CONF_DIGITAL_AGC])}")
+    if settings:
+        args += ["-t", ",".join(settings)]
+    for spec in config[CONF_FLEX_DECODERS]:
+        args += ["-X", spec]
+    for out in config[CONF_OUTPUTS]:
+        args += ["-F", out]
+    if CONF_REPORT_NOISE in config:
+        args += ["-M", f"noise:{config[CONF_REPORT_NOISE].total_seconds}"]
+    if config[CONF_HOP_ON_EVENT]:
+        args += ["-E", "hop"]
+    for key, value in config[CONF_TAGS].items():
+        args += ["-K", f"{key}={value}"]
+    if config[CONF_VERBOSITY]:
+        args += ["-" + "v" * config[CONF_VERBOSITY]]
     return args + config[CONF_EXTRA_ARGS]
 
 
@@ -164,6 +339,26 @@ async def to_code(config):
         cg.add(var.add_arg(arg))
     if CONF_TASK_CORE in config:
         cg.add(var.set_task_core(config[CONF_TASK_CORE]))
+    cg.add(var.set_task_priority(config[CONF_TASK_PRIORITY]))
+    cg.add(var.set_acquire_priority(config[CONF_ACQUIRE_PRIORITY]))
+    cg.add(var.set_usb_task_priority(config[CONF_USB_TASK_PRIORITY]))
+    if CONF_USB_BUFFER in config:
+        cg.add(var.set_usb_buffer(config[CONF_USB_BUFFER]))
+    for key, setter in (
+        (CONF_EFFECTIVE_SAMPLE_RATE, "set_effective_sample_rate_sensor"),
+        (CONF_USB_OVERRUNS, "set_usb_overruns_sensor"),
+        (CONF_DROPPED_SAMPLES, "set_dropped_samples_sensor"),
+        (CONF_DECODED_EVENTS, "set_decoded_events_sensor"),
+        (CONF_CPU_LOAD_CORE0, "set_cpu_load_core0_sensor"),
+        (CONF_CPU_LOAD_CORE1, "set_cpu_load_core1_sensor"),
+    ):
+        if conf := config.get(key):
+            sens = await sensor.new_sensor(conf)
+            cg.add(getattr(var, setter)(sens))
+    if CONF_CPU_LOAD_CORE0 in config or CONF_CPU_LOAD_CORE1 in config:
+        # Per-task run-time counters: CPU load is 100% minus each core's idle task share
+        add_idf_sdkconfig_option("CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS", True)
+        cg.add_define("USE_RTL433_CPU_LOAD")
     # Decoder sets go straight to the port layer rather than as -R, so they can change on each hop
     default = config.get(CONF_DECODERS)
     for index, entry in enumerate(config[CONF_FREQUENCIES]):

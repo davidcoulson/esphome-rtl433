@@ -27,6 +27,7 @@
 #include "esp_rtl_sdr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "rtl433_core.h"
 #endif
 #ifdef RTLSDR
 #include <rtl-sdr.h>
@@ -105,6 +106,8 @@ struct sdr_dev {
     uint32_t esp_rate;            ///< requested sample rate, applied at stream start
     int esp_gain;                 ///< tuner gain in tenths of dB, < 0 = automatic
     int esp_ppm;
+    int esp_biastee;              ///< -1 = leave as is
+    int esp_digital_agc;          ///< -1 = leave as is
     volatile int esp_streaming;
 #endif
 
@@ -1140,6 +1143,30 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
 #define ESP_SDR_ATTACH_WAIT_MS 15000
 #define ESP_SDR_READ_TIMEOUT_MS 500
 
+// The open handle, for the ESPHome component's diagnostics; guarded against a concurrent close
+static pthread_mutex_t esp_active_lock = PTHREAD_MUTEX_INITIALIZER;
+static esp_rtl_sdr_handle_t esp_active = NULL;
+
+int rtl433_port_usb_stats(struct rtl433_usb_stats *out)
+{
+    int ok = 0;
+    pthread_mutex_lock(&esp_active_lock);
+    if (esp_active) {
+        esp_rtl_sdr_metrics_t m;
+        if (esp_rtl_sdr_get_metrics(esp_active, &m) == ESP_OK) {
+            out->effective_sps  = m.effective_sps;
+            out->sample_rate    = m.sample_rate_sps;
+            out->frequency      = m.frequency_hz;
+            out->overruns       = m.overruns;
+            out->consumer_drops = m.consumer_drops;
+            out->bytes_total    = m.bytes_total;
+            ok = 1;
+        }
+    }
+    pthread_mutex_unlock(&esp_active_lock);
+    return ok;
+}
+
 static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, void *ctx)
 {
     sdr_dev_t *dev = ctx;
@@ -1178,9 +1205,16 @@ static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
     pthread_mutex_init(&dev->lock, NULL);
 #endif
     dev->esp_gain = -1;
+    dev->esp_biastee = -1;
+    dev->esp_digital_agc = -1;
 
     esp_rtl_sdr_config_t config;
     esp_rtl_sdr_config_default(&config);
+    if (rtl433_port_usb_ring_bytes)
+        config.pull_ring_bytes = rtl433_port_usb_ring_bytes;
+    if (rtl433_port_usb_task_priority)
+        config.usb_task_priority = rtl433_port_usb_task_priority;
+    config.usb_task_core_id = rtl433_port_usb_task_core;
     config.event_cb = esp_sdr_event_cb;
     config.event_ctx = dev;
     config.delivery_mode = ESP_RTL_SDR_DELIVERY_READ; // rtl_433 pulls, like a socket
@@ -1225,6 +1259,10 @@ static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
         snprintf(dev->dev_info, info_len, "{\"vendor\":\"%s\", \"product\":\"%s\", \"serial\":\"%s\"}",
                 info.manufacturer, info.product, info.serial);
 
+    pthread_mutex_lock(&esp_active_lock);
+    esp_active = dev->esp_dev;
+    pthread_mutex_unlock(&esp_active_lock);
+
     *out_dev = dev;
     return 0;
 }
@@ -1255,6 +1293,11 @@ static int esp_sdr_start_stream(sdr_dev_t *dev)
     }
     dev->esp_streaming = 1;
     esp_sdr_apply_gain(dev);
+    // Like gain, these need the claimed interface
+    if (dev->esp_biastee >= 0)
+        esp_rtl_sdr_set_bias_tee(dev->esp_dev, dev->esp_biastee != 0);
+    if (dev->esp_digital_agc >= 0)
+        esp_rtl_sdr_set_rtl_agc(dev->esp_dev, dev->esp_digital_agc != 0);
     return 0;
 }
 
@@ -1389,6 +1432,10 @@ int sdr_close(sdr_dev_t *dev)
 
 #ifdef ESP_RTL_SDR
     if (dev->esp_dev) {
+        pthread_mutex_lock(&esp_active_lock);
+        if (esp_active == dev->esp_dev)
+            esp_active = NULL;
+        pthread_mutex_unlock(&esp_active_lock);
         esp_rtl_sdr_stop(dev->esp_dev, 0);
         dev->esp_streaming = 0;
         ret = esp_rtl_sdr_uninstall(dev->esp_dev) == ESP_OK ? 0 : -1;
@@ -1837,6 +1884,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
 
     if (!sdr_settings || !*sdr_settings)
         return 0;
+
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev) {
+        while (sdr_settings && *sdr_settings) {
+            char const *val = NULL;
+            if (kwargs_match(sdr_settings, "biastee", &val)) {
+                dev->esp_biastee = atobv(val, 1);
+                if (dev->esp_streaming)
+                    esp_rtl_sdr_set_bias_tee(dev->esp_dev, dev->esp_biastee != 0);
+            }
+            else if (kwargs_match(sdr_settings, "digital_agc", &val)) {
+                dev->esp_digital_agc = atobv(val, 1);
+                if (dev->esp_streaming)
+                    esp_rtl_sdr_set_rtl_agc(dev->esp_dev, dev->esp_digital_agc != 0);
+            }
+            else {
+                print_logf(LOG_ERROR, __func__, "Unsupported setting for the USB SDR: %s", sdr_settings);
+                r = -1;
+            }
+            sdr_settings = kwargs_skip(sdr_settings);
+        }
+        return r;
+    }
+#endif
 
     if (dev->rtl_tcp) {
         while (sdr_settings && *sdr_settings) {

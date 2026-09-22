@@ -17,6 +17,13 @@ static const char *const TAG = "rtl_433";
 
 volatile int rtl433_port_exit_code = -1;
 
+size_t rtl433_port_usb_ring_bytes = 0;
+uint8_t rtl433_port_usb_task_priority = 0;
+uint8_t rtl433_port_usb_task_core = 0xFF;
+
+volatile uint32_t rtl433_port_events = 0;
+void rtl433_port_count_event(void) { rtl433_port_events++; }
+
 static rtl433_port_log_sink_t log_sink = NULL;
 
 void rtl433_port_set_log_sink(rtl433_port_log_sink_t sink) { log_sink = sink; }

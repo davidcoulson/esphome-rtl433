@@ -36,3 +36,27 @@ rtl_433:
       sample_rate: 2048k
       hop_interval: 30s
       decoders: [scmplus]
+  units: si
+  detector:
+    fsk_detector: auto
+    min_level: -30
+    min_snr: 9
+    auto_level: true
+    squelch: false
+    level_estimator: magnitude
+  bias_tee: false
+  digital_agc: false
+  flex_decoders: ["n=test,m=OOK_PWM,s=400,l=1200,r=5000"]
+  outputs: ["mqtt://10.2.3.6:1883,retain=0"]
+  report_noise: 60s
+  tags: {receiver: attic}
+  usb_buffer: 1MB
+  task_priority: 5
+  acquire_priority: 6
+  usb_task_priority: 0
+  effective_sample_rate: {name: Effective Sample Rate}
+  usb_overruns: {name: USB Overruns}
+  dropped_samples: {name: Dropped Samples}
+  decoded_events: {name: Decoded Events}
+  cpu_load_core0: {name: CPU Load Core 0}
+  cpu_load_core1: {name: CPU Load Core 1}

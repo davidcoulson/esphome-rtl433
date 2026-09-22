@@ -16,6 +16,8 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     THREADS ESP_RTL_SDR _GNU_SOURCE
     MG_ENABLE_FILESYSTEM=1 MG_ENABLE_HTTP_CGI=0 MG_ENABLE_DIRECTORY_LISTING=0 MG_ENABLE_BROADCAST=1)
 # Every rtl_433 source sees the port shims (exit() -> task exit, missing POSIX bits)
+# ESPHome builds for size (-Os); the demodulators are tight DSP loops that gain far more from -O2
+target_compile_options(${COMPONENT_LIB} PRIVATE -O2)
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -include "${CMAKE_CURRENT_LIST_DIR}/port/rtl433_port.h"
     -Wno-unused-variable -Wno-unused-function -Wno-sign-compare -Wno-format

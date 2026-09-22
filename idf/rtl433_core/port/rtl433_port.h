@@ -1,6 +1,9 @@
 // Forced into every rtl_433 translation unit. Keeps the upstream sources close to unmodified.
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -13,6 +16,14 @@ void rtl433_port_exit(int code) __attribute__((noreturn));
 typedef void (*rtl433_port_log_sink_t)(int level, char const *src, char const *msg);
 void rtl433_port_set_log_sink(rtl433_port_log_sink_t sink);
 void rtl433_port_log(int level, char const *src, char const *msg);
+
+// USB driver tuning, set by the ESPHome component before rtl_433 opens the dongle (0 = driver default)
+extern size_t rtl433_port_usb_ring_bytes;
+extern uint8_t rtl433_port_usb_task_priority;
+extern uint8_t rtl433_port_usb_task_core;  // 0xFF = no affinity
+
+// Counts decoded events (src/r_api.c)
+void rtl433_port_count_event(void);
 
 // Per-band decoder sets (port/rtl433_bands.c)
 struct r_cfg;
