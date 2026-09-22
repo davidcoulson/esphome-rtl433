@@ -27,6 +27,10 @@ ethernet:
     pin: GPIO50
   phy_addr: 1
 rtl_433:
-  frequencies: [433.92MHz, 915MHz]
   hop_interval: 60s
-  sample_rate: 1024000
+  frequencies:
+    - frequency: 433.92MHz
+      sample_rate: 250k
+    - frequency: 915MHz
+      sample_rate: 1024k
+      hop_interval: 30s

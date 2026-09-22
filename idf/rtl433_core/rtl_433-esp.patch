@@ -1,3 +1,16 @@
+diff --git a/idf/rtl433_core/include/rtl_433.h b/idf/rtl433_core/include/rtl_433.h
+index e01ca64..6391fbe 100644
+--- a/idf/rtl433_core/include/rtl_433.h
++++ b/idf/rtl433_core/include/rtl_433.h
+@@ -80,6 +80,8 @@ typedef struct r_cfg {
+     int fsk_pulse_detect_mode;
+     int hop_times;
+     int hop_time[MAX_FREQS];
++    int hop_rates;                   ///< Number of -s given; more than one pairs a sample rate with each frequency.
++    uint32_t hop_rate[MAX_FREQS];
+     time_t hop_start_time;
+     int duration;
+     time_t stop_time;
 diff --git a/idf/rtl433_core/src/logger.c b/idf/rtl433_core/src/logger.c
 index dce0404..4d198fe 100644
 --- a/idf/rtl433_core/src/logger.c
@@ -21,6 +34,58 @@ index dce0404..4d198fe 100644
  }
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
+diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
+index 2a94dc5..d772a6a 100644
+--- a/idf/rtl433_core/src/r_api.c
++++ b/idf/rtl433_core/src/r_api.c
+@@ -84,6 +84,7 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
+     cfg->frequencies = 1;
+     cfg->frequency_index = 0;
+     cfg->frequency[0] = center_freq;
++    cfg->hop_rates = 0; // no more hopping: keep whatever rate is running (or is set next)
+     // cfg->center_frequency = center_freq; // actually applied in the sdr event
+     sdr_set_center_freq(cfg->dev, center_freq, 1);
+ }
+diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
+index c8bb91d..1e91e0c 100644
+--- a/idf/rtl433_core/src/rtl_433.c
++++ b/idf/rtl433_core/src/rtl_433.c
+@@ -594,6 +594,10 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
+         break;
+     case 's':
+         cfg->samp_rate = atouint32_metric(arg, "-s: ");
++        // Like -H: each -s goes with the -f in the same position, so e.g. 433.92M at 250k and 915M at 1024k
++        if (cfg->hop_rates < MAX_FREQS) {
++            cfg->hop_rate[cfg->hop_rates++] = cfg->samp_rate;
++        }
+         break;
+     case 'b':
+         cfg->out_block_size = atouint32_metric(arg, "-b: ");
+@@ -1180,6 +1184,12 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+         cfg->hop_now = 0;
+         time(&cfg->hop_start_time);
+         cfg->frequency_index = (cfg->frequency_index + 1) % cfg->frequencies;
++        if (cfg->hop_rates > 1) {
++            // per-frequency sample rate: if there are too few, the last one applies
++            int rate_index = cfg->hop_rates > cfg->frequency_index ? cfg->frequency_index : cfg->hop_rates - 1;
++            if (cfg->hop_rate[rate_index] != cfg->samp_rate)
++                sdr_set_sample_rate(cfg->dev, cfg->hop_rate[rate_index], 1);
++        }
+         sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1);
+     }
+ }
+@@ -1307,6 +1317,11 @@ static int start_sdr(r_cfg_t *cfg)
+     // cfg->demod->sample_signed = sdr_get_sample_signed(cfg->dev);
+ 
+     /* Set the sample rate */
++    if (cfg->hop_rates > 1) {
++        // (re)start at the rate that goes with the current frequency
++        int rate_index = cfg->hop_rates > cfg->frequency_index ? cfg->frequency_index : cfg->hop_rates - 1;
++        cfg->samp_rate = cfg->hop_rate[rate_index];
++    }
+     sdr_set_sample_rate(cfg->dev, cfg->samp_rate, 1); // always verbose
+ 
+     if (cfg->verbosity || cfg->demod->level_limit < 0.0) {
 diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
 index 2436821..a52f646 100644
 --- a/idf/rtl433_core/src/sdr.c

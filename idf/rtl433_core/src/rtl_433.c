@@ -594,6 +594,10 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
         break;
     case 's':
         cfg->samp_rate = atouint32_metric(arg, "-s: ");
+        // Like -H: each -s goes with the -f in the same position, so e.g. 433.92M at 250k and 915M at 1024k
+        if (cfg->hop_rates < MAX_FREQS) {
+            cfg->hop_rate[cfg->hop_rates++] = cfg->samp_rate;
+        }
         break;
     case 'b':
         cfg->out_block_size = atouint32_metric(arg, "-b: ");
@@ -1180,6 +1184,12 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
         cfg->hop_now = 0;
         time(&cfg->hop_start_time);
         cfg->frequency_index = (cfg->frequency_index + 1) % cfg->frequencies;
+        if (cfg->hop_rates > 1) {
+            // per-frequency sample rate: if there are too few, the last one applies
+            int rate_index = cfg->hop_rates > cfg->frequency_index ? cfg->frequency_index : cfg->hop_rates - 1;
+            if (cfg->hop_rate[rate_index] != cfg->samp_rate)
+                sdr_set_sample_rate(cfg->dev, cfg->hop_rate[rate_index], 1);
+        }
         sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1);
     }
 }
@@ -1307,6 +1317,11 @@ static int start_sdr(r_cfg_t *cfg)
     // cfg->demod->sample_signed = sdr_get_sample_signed(cfg->dev);
 
     /* Set the sample rate */
+    if (cfg->hop_rates > 1) {
+        // (re)start at the rate that goes with the current frequency
+        int rate_index = cfg->hop_rates > cfg->frequency_index ? cfg->frequency_index : cfg->hop_rates - 1;
+        cfg->samp_rate = cfg->hop_rate[rate_index];
+    }
     sdr_set_sample_rate(cfg->dev, cfg->samp_rate, 1); // always verbose
 
     if (cfg->verbosity || cfg->demod->level_limit < 0.0) {

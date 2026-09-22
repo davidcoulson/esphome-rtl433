@@ -84,6 +84,7 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
     cfg->frequencies = 1;
     cfg->frequency_index = 0;
     cfg->frequency[0] = center_freq;
+    cfg->hop_rates = 0; // no more hopping: keep whatever rate is running (or is set next)
     // cfg->center_frequency = center_freq; // actually applied in the sdr event
     sdr_set_center_freq(cfg->dev, center_freq, 1);
 }

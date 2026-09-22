@@ -35,6 +35,31 @@ rtl_433_ns = cg.esphome_ns.namespace("rtl_433")
 Rtl433Component = rtl_433_ns.class_("Rtl433Component", cg.Component)
 
 
+CONF_FREQUENCY = "frequency"
+
+
+def _sample_rate(value):
+    # esp_rtl_sdr streams 225k-300k or 900k-3.2M S/s; accepts 250000, "250k", "1024k"
+    if isinstance(value, str) and value.lower().endswith("k"):
+        value = float(value[:-1]) * 1000
+    value = cv.int_(value)
+    if not (225001 <= value <= 300000 or 900000 <= value <= 3200000):
+        raise cv.Invalid("sample_rate must be 225k-300k or 900k-3.2M S/s")
+    return value
+
+
+def _frequency_entry(value):
+    if isinstance(value, dict):
+        return cv.Schema(
+            {
+                cv.Required(CONF_FREQUENCY): cv.frequency,
+                cv.Optional(CONF_SAMPLE_RATE): _sample_rate,
+                cv.Optional(CONF_HOP_INTERVAL): cv.positive_time_period_seconds,
+            }
+        )(value)
+    return {CONF_FREQUENCY: cv.frequency(value)}
+
+
 def _only_p4(config):
     if esp32.get_esp32_variant() != VARIANT_ESP32P4:
         raise cv.Invalid("rtl_433 needs an ESP32-P4 (high-speed USB host)")
@@ -47,13 +72,12 @@ CONFIG_SCHEMA = cv.All(
             cv.GenerateID(): cv.declare_id(Rtl433Component),
             # rtl_433's HTTP/WebSocket server, which the Home Assistant rtl_433 integration connects to
             cv.Optional(CONF_PORT, default=8433): cv.port,
-            cv.Optional(CONF_FREQUENCIES, default=["433.92MHz"]): cv.ensure_list(
-                cv.frequency
+            # Plain frequencies, or {frequency, sample_rate, hop_interval} to override the defaults below per band
+            cv.Optional(CONF_FREQUENCIES, default=["433.92MHz"]): cv.All(
+                cv.ensure_list(_frequency_entry), cv.Length(min=1, max=32)
             ),
             cv.Optional(CONF_HOP_INTERVAL, default="600s"): cv.positive_time_period_seconds,
-            cv.Optional(CONF_SAMPLE_RATE, default=250000): cv.int_range(
-                min=225001, max=3200000
-            ),
+            cv.Optional(CONF_SAMPLE_RATE, default=250000): _sample_rate,
             # Tuner gain in dB; omitted = automatic
             cv.Optional(CONF_GAIN): cv.float_range(min=0, max=50),
             cv.Optional(CONF_PPM_ERROR, default=0): cv.int_range(min=-200, max=200),
@@ -80,11 +104,19 @@ def _rtl433_args(config):
     # -D restart: rtl_433's stall watchdog reopens the dongle (e.g. after it is replugged) instead of quitting
     args = ["rtl_433", "-d", "esp", "-D", "restart", "-F", f"http:0.0.0.0:{config[CONF_PORT]}"]
     args += ["-M", "time:iso:usec:tz", "-M", "protocol", "-M", "level"]
-    for freq in config[CONF_FREQUENCIES]:
-        args += ["-f", str(int(freq))]
-    if len(config[CONF_FREQUENCIES]) > 1:
-        args += ["-H", str(config[CONF_HOP_INTERVAL].total_seconds)]
-    args += ["-s", str(config[CONF_SAMPLE_RATE])]
+    freqs = config[CONF_FREQUENCIES]
+    for entry in freqs:
+        args += ["-f", str(int(entry[CONF_FREQUENCY]))]
+    # One -H/-s each: rtl_433 pairs the n-th with the n-th -f. A single value applies to every band.
+    rates = [e.get(CONF_SAMPLE_RATE, config[CONF_SAMPLE_RATE]) for e in freqs]
+    for rate in rates if len(set(rates)) > 1 else rates[:1]:
+        args += ["-s", str(rate)]
+    if len(freqs) > 1:
+        hops = [
+            e.get(CONF_HOP_INTERVAL, config[CONF_HOP_INTERVAL]).total_seconds for e in freqs
+        ]
+        for hop in hops if len(set(hops)) > 1 else hops[:1]:
+            args += ["-H", str(hop)]
     if CONF_GAIN in config:
         args += ["-g", f"{config[CONF_GAIN]:g}"]
     if config[CONF_PPM_ERROR]:

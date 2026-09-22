@@ -37,15 +37,25 @@ external_components:
     components: [rtl_433]
 
 rtl_433:
-  frequencies: [433.92MHz, 915MHz]   # more than one: rtl_433 hops between them
-  hop_interval: 60s
-  sample_rate: 1024000               # 225k-300k or 900k-3.2M S/s
+  hop_interval: 60s                  # default for every band
+  sample_rate: 250k                  # default: 225k-300k or 900k-3.2M S/s
+  frequencies:                       # more than one: rtl_433 hops between them
+    - 433.92MHz                      # plain entry uses the defaults above
+    - frequency: 915MHz              # or override per band
+      sample_rate: 1024k
+      hop_interval: 30s
   # gain: 40                         # dB; omit for automatic
   # ppm_error: 0
   # extra_args: ["-R", "40"]         # anything else rtl_433 accepts
 ```
 
 Then add an rtl_433 hub in Home Assistant pointing at `<device>:8433`, path `/ws`.
+
+Per-band sample rates are an addition to rtl_433 (upstream uses one rate for every hop): each `-s` pairs with the `-f` in the same position, as `-H` already does. The backend restarts the USB stream for a rate change, which takes a moment at each hop.
+
+### Managing the radio from Home Assistant
+
+The integration's SDR controls (frequency, sample rate, gain, ppm, hop interval) work as they do against rtl_433 on a PC: they go through rtl_433's `/cmd` endpoint to the dongle, so automations can retune it. As upstream, setting a frequency this way stops hopping and stays on that frequency until the next reboot, which restores the YAML configuration.
 
 ## License
 

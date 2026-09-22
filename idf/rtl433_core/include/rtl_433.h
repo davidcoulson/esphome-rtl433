@@ -80,6 +80,8 @@ typedef struct r_cfg {
     int fsk_pulse_detect_mode;
     int hop_times;
     int hop_time[MAX_FREQS];
+    int hop_rates;                   ///< Number of -s given; more than one pairs a sample rate with each frequency.
+    uint32_t hop_rate[MAX_FREQS];
     time_t hop_start_time;
     int duration;
     time_t stop_time;
