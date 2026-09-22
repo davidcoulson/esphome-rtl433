@@ -1,0 +1,32 @@
+# Compile test: Waveshare ESP32-P4-WIFI6-POE-ETH (IP101 over RMII), ESP-IDF 6.1
+esphome:
+  name: rtl433-test
+esp32:
+  variant: esp32p4
+  engineering_sample: true
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    version: 6.1.0
+psram:
+  mode: hex
+  speed: 200MHz
+external_components:
+  - source:
+      type: local
+      path: ../components
+logger:
+api:
+ethernet:
+  type: IP101
+  mdc_pin: GPIO31
+  mdio_pin: GPIO52
+  power_pin: GPIO51
+  clk:
+    mode: CLK_EXT_IN
+    pin: GPIO50
+  phy_addr: 1
+rtl_433:
+  frequencies: [433.92MHz, 915MHz]
+  hop_interval: 60s
+  sample_rate: 1024000
