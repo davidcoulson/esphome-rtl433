@@ -36,6 +36,27 @@ Rtl433Component = rtl_433_ns.class_("Rtl433Component", cg.Component)
 
 
 CONF_FREQUENCY = "frequency"
+CONF_DECODERS = "decoders"
+CONF_UNITS = "units"
+
+
+def _known_decoders():
+    # Decoder names as rtl_433 declares them (DECL(name) in rtl_433_devices.h), e.g. scmplus, acurite_txr
+    header = RTL433_CORE / "include" / "rtl_433_devices.h"
+    import re
+
+    return re.findall(r"DECL\((\w+)\)", header.read_text())
+
+
+def _decoder(value):
+    # A decoder name (see `rtl_433 -R help`'s source list) or its protocol number
+    if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
+        return str(cv.int_range(min=1, max=999)(int(value)))
+    value = cv.string_strict(value)
+    known = _known_decoders()
+    if value not in known:
+        raise cv.Invalid(f"unknown rtl_433 decoder '{value}' (use the name from rtl_433_devices.h, e.g. scmplus)")
+    return value
 
 
 def _sample_rate(value):
@@ -55,6 +76,8 @@ def _frequency_entry(value):
                 cv.Required(CONF_FREQUENCY): cv.frequency,
                 cv.Optional(CONF_SAMPLE_RATE): _sample_rate,
                 cv.Optional(CONF_HOP_INTERVAL): cv.positive_time_period_seconds,
+                # Only these decoders while on this frequency
+                cv.Optional(CONF_DECODERS): cv.ensure_list(_decoder),
             }
         )(value)
     return {CONF_FREQUENCY: cv.frequency(value)}
@@ -81,6 +104,12 @@ CONFIG_SCHEMA = cv.All(
             # Tuner gain in dB; omitted = automatic
             cv.Optional(CONF_GAIN): cv.float_range(min=0, max=50),
             cv.Optional(CONF_PPM_ERROR, default=0): cv.int_range(min=-200, max=200),
+            # Decoders for every band that doesn't list its own; omitted = rtl_433's default set
+            cv.Optional(CONF_DECODERS): cv.ensure_list(_decoder),
+            # rtl_433 -C: native, si or customary units in the events
+            cv.Optional(CONF_UNITS, default="si"): cv.one_of(
+                "native", "si", "customary", lower=True
+            ),
             # Anything else rtl_433 accepts on its command line, e.g. ["-R", "40", "-M", "level"]
             cv.Optional(CONF_EXTRA_ARGS, default=[]): cv.ensure_list(cv.string_strict),
         }
@@ -121,6 +150,7 @@ def _rtl433_args(config):
         args += ["-g", f"{config[CONF_GAIN]:g}"]
     if config[CONF_PPM_ERROR]:
         args += ["-p", str(config[CONF_PPM_ERROR])]
+    args += ["-C", config[CONF_UNITS]]
     return args + config[CONF_EXTRA_ARGS]
 
 
@@ -129,6 +159,12 @@ async def to_code(config):
     await cg.register_component(var, config)
     for arg in _rtl433_args(config):
         cg.add(var.add_arg(arg))
+    # Decoder sets go straight to the port layer rather than as -R, so they can change on each hop
+    default = config.get(CONF_DECODERS)
+    for index, entry in enumerate(config[CONF_FREQUENCIES]):
+        decoders = entry.get(CONF_DECODERS, default)
+        if decoders:
+            cg.add(var.add_band_decoders(index, ",".join(decoders)))
 
     if idf_version() >= cv.Version(6, 0, 0):
         add_idf_component(name="espressif/usb", ref=USB_REF)

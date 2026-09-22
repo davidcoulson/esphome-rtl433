@@ -3,7 +3,7 @@
 file(GLOB R433_SRCS "src/*.c" "src/devices/*.c")
 # No terminal here: port/term_ctl_stub.c replaces the TTY colour code
 list(FILTER R433_SRCS EXCLUDE REGEX ".*/src/term_ctl\\.c$")
-list(APPEND R433_SRCS "port/rtl433_port.c" "port/term_ctl_stub.c")
+list(APPEND R433_SRCS "port/rtl433_port.c" "port/term_ctl_stub.c" "port/rtl433_bands.c")
 
 idf_component_register(
     SRCS ${R433_SRCS}

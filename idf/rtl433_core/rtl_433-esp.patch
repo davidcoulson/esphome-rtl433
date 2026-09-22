@@ -35,19 +35,22 @@ index dce0404..4d198fe 100644
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
 diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
-index 2a94dc5..d772a6a 100644
+index 2a94dc5..bbe4f44 100644
 --- a/idf/rtl433_core/src/r_api.c
 +++ b/idf/rtl433_core/src/r_api.c
-@@ -84,6 +84,7 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
+@@ -84,6 +84,10 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
      cfg->frequencies = 1;
      cfg->frequency_index = 0;
      cfg->frequency[0] = center_freq;
 +    cfg->hop_rates = 0; // no more hopping: keep whatever rate is running (or is set next)
++#ifdef ESP_RTL_SDR
++    rtl433_port_manual_tune(cfg); // decoders for a frequency outside the hop list
++#endif
      // cfg->center_frequency = center_freq; // actually applied in the sdr event
      sdr_set_center_freq(cfg->dev, center_freq, 1);
  }
 diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
-index c8bb91d..1e91e0c 100644
+index c8bb91d..ab2ab40 100644
 --- a/idf/rtl433_core/src/rtl_433.c
 +++ b/idf/rtl433_core/src/rtl_433.c
 @@ -594,6 +594,10 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
@@ -61,7 +64,7 @@ index c8bb91d..1e91e0c 100644
          break;
      case 'b':
          cfg->out_block_size = atouint32_metric(arg, "-b: ");
-@@ -1180,6 +1184,12 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+@@ -1180,7 +1184,16 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
          cfg->hop_now = 0;
          time(&cfg->hop_start_time);
          cfg->frequency_index = (cfg->frequency_index + 1) % cfg->frequencies;
@@ -72,9 +75,13 @@ index c8bb91d..1e91e0c 100644
 +                sdr_set_sample_rate(cfg->dev, cfg->hop_rate[rate_index], 1);
 +        }
          sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1);
++#ifdef ESP_RTL_SDR
++        rtl433_port_apply_band(cfg); // this band's decoders only
++#endif
      }
  }
-@@ -1307,6 +1317,11 @@ static int start_sdr(r_cfg_t *cfg)
+ 
+@@ -1307,6 +1320,11 @@ static int start_sdr(r_cfg_t *cfg)
      // cfg->demod->sample_signed = sdr_get_sample_signed(cfg->dev);
  
      /* Set the sample rate */
@@ -86,6 +93,16 @@ index c8bb91d..1e91e0c 100644
      sdr_set_sample_rate(cfg->dev, cfg->samp_rate, 1); // always verbose
  
      if (cfg->verbosity || cfg->demod->level_limit < 0.0) {
+@@ -1518,6 +1536,9 @@ int main(int argc, char **argv) {
+     if (!cfg->no_default_devices) {
+         register_all_protocols(cfg, 0); // register all defaults
+     }
++#ifdef ESP_RTL_SDR
++    rtl433_port_apply_band(cfg); // per-band decoder sets, if configured
++#endif
+ 
+     // check if we need FM demod
+     for (void **iter = demod->r_devs.elems; iter && *iter; ++iter) {
 diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
 index 2436821..a52f646 100644
 --- a/idf/rtl433_core/src/sdr.c

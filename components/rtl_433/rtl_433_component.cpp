@@ -40,6 +40,8 @@ void Rtl433Component::loop() {
 void Rtl433Component::task_entry(void *arg) {
   auto *self = static_cast<Rtl433Component *>(arg);
   rtl433_port_set_log_sink(log_sink);
+  for (auto &band : self->band_decoders_)
+    rtl433_port_set_band_decoders(band.first, band.second.c_str());
   std::vector<char *> argv;
   for (auto &a : self->args_)
     argv.push_back(a.data());
@@ -55,6 +57,8 @@ void Rtl433Component::dump_config() {
   for (auto &a : this->args_)
     line += a + " ";
   ESP_LOGCONFIG(TAG, "  Command line: %s", line.c_str());
+  for (auto &band : this->band_decoders_)
+    ESP_LOGCONFIG(TAG, "  Band %d decoders: %s", band.first, band.second.c_str());
 }
 
 }  // namespace esphome::rtl_433

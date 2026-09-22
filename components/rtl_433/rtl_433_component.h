@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <freertos/FreeRTOS.h>
@@ -13,6 +14,7 @@ namespace esphome::rtl_433 {
 class Rtl433Component : public Component {
  public:
   void add_arg(const char *arg) { this->args_.emplace_back(arg); }
+  void add_band_decoders(int band, const char *list) { this->band_decoders_.emplace_back(band, list); }
 
   void setup() override;
   void loop() override;
@@ -23,6 +25,7 @@ class Rtl433Component : public Component {
   static void task_entry(void *arg);
 
   std::vector<std::string> args_;
+  std::vector<std::pair<int, std::string>> band_decoders_;
   TaskHandle_t task_{nullptr};
   bool started_{false};
 };

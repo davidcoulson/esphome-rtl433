@@ -14,6 +14,12 @@ typedef void (*rtl433_port_log_sink_t)(int level, char const *src, char const *m
 void rtl433_port_set_log_sink(rtl433_port_log_sink_t sink);
 void rtl433_port_log(int level, char const *src, char const *msg);
 
+// Per-band decoder sets (port/rtl433_bands.c)
+struct r_cfg;
+void rtl433_port_set_band_decoders(int band, char const *list);
+void rtl433_port_apply_band(struct r_cfg *cfg);
+void rtl433_port_manual_tune(struct r_cfg *cfg);
+
 // lwIP's netdb has getaddrinfo()/getnameinfo() but not these
 const char *gai_strerror(int ecode);
 

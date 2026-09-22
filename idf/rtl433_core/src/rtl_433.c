@@ -1191,6 +1191,9 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
                 sdr_set_sample_rate(cfg->dev, cfg->hop_rate[rate_index], 1);
         }
         sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1);
+#ifdef ESP_RTL_SDR
+        rtl433_port_apply_band(cfg); // this band's decoders only
+#endif
     }
 }
 
@@ -1533,6 +1536,9 @@ int main(int argc, char **argv) {
     if (!cfg->no_default_devices) {
         register_all_protocols(cfg, 0); // register all defaults
     }
+#ifdef ESP_RTL_SDR
+    rtl433_port_apply_band(cfg); // per-band decoder sets, if configured
+#endif
 
     // check if we need FM demod
     for (void **iter = demod->r_devs.elems; iter && *iter; ++iter) {
