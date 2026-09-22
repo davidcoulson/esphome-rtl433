@@ -9,6 +9,11 @@ extern "C" {
 // the rtl_433 task instead; the ESPHome component notices and reports the failure.
 void rtl433_port_exit(int code) __attribute__((noreturn));
 
+// Every rtl_433 log line (see src/logger.c); the ESPHome component installs the sink
+typedef void (*rtl433_port_log_sink_t)(int level, char const *src, char const *msg);
+void rtl433_port_set_log_sink(rtl433_port_log_sink_t sink);
+void rtl433_port_log(int level, char const *src, char const *msg);
+
 // lwIP's netdb has getaddrinfo()/getnameinfo() but not these
 const char *gai_strerror(int ecode);
 

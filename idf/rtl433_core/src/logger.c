@@ -31,12 +31,18 @@ void r_logger_set_log_handler(r_logger_handler const handler, void *userdata)
 
 void print_log(log_level_t level, char const *src, char const *msg)
 {
+#ifdef ESP_RTL_SDR
+    // Mirror into the ESPHome logger; stdio on the ESP32 only reaches the serial console
+    rtl433_port_log((int)level, src, msg);
+#endif
     if (logger_handler) {
         logger_handler(level, src, msg, logger_handler_userdata);
     }
+#ifndef ESP_RTL_SDR
     else {
         default_handler(level, src, msg);
     }
+#endif
 }
 
 void print_logf(log_level_t level, char const *src, char const *fmt, ...)

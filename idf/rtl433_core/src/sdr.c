@@ -23,6 +23,11 @@
 #include "logger.h"
 #include "fatal.h"
 #include "compat_pthread.h"
+#ifdef ESP_RTL_SDR
+#include "esp_rtl_sdr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#endif
 #ifdef RTLSDR
 #include <rtl-sdr.h>
 #if defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
@@ -92,6 +97,15 @@ struct sdr_dev {
     rtlsdr_dev_t *rtlsdr_dev;
     sdr_event_cb_t rtlsdr_cb;
     void *rtlsdr_cb_ctx;
+#endif
+
+#ifdef ESP_RTL_SDR
+    esp_rtl_sdr_handle_t esp_dev; ///< RTL2832U dongle on the ESP32-P4 USB host (esp_rtl_sdr)
+    uint32_t esp_freq;            ///< requested center frequency, applied at stream start
+    uint32_t esp_rate;            ///< requested sample rate, applied at stream start
+    int esp_gain;                 ///< tuner gain in tenths of dB, < 0 = automatic
+    int esp_ppm;
+    volatile int esp_streaming;
 #endif
 
     char *dev_info;
@@ -1117,12 +1131,222 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
 
 #endif
 
+/* esp_rtl_sdr (ESP32-P4 USB host) */
+
+#ifdef ESP_RTL_SDR
+
+#define ESP_SDR_DEFAULT_FREQ 433920000u
+#define ESP_SDR_DEFAULT_RATE 250000u
+#define ESP_SDR_ATTACH_WAIT_MS 15000
+#define ESP_SDR_READ_TIMEOUT_MS 500
+
+static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, void *ctx)
+{
+    sdr_dev_t *dev = ctx;
+    switch (event) {
+    case ESP_RTL_SDR_EVT_ENUMERATED: {
+        esp_rtl_sdr_device_info_t const *info = payload;
+        if (info)
+            print_logf(LOG_NOTICE, "SDR", "USB SDR attached: %s %s, SN: %s (%s speed)",
+                    info->manufacturer, info->product, info->serial, info->high_speed ? "high" : "full");
+        break;
+    }
+    case ESP_RTL_SDR_EVT_DISCONNECTED:
+        print_log(LOG_ERROR, "SDR", "USB SDR disconnected");
+        dev->esp_streaming = 0;
+        break;
+    case ESP_RTL_SDR_EVT_ERROR: {
+        esp_rtl_sdr_error_info_t const *err = payload;
+        if (err)
+            print_logf(LOG_WARNING, "SDR", "esp_rtl_sdr: %s %s", esp_rtl_sdr_err_to_name(err->code), err->message);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
+{
+    UNUSED(verbose);
+    sdr_dev_t *dev = calloc(1, sizeof(sdr_dev_t));
+    if (!dev) {
+        WARN_CALLOC("esp_sdr_open()");
+        return -1;
+    }
+#ifdef THREADS
+    pthread_mutex_init(&dev->lock, NULL);
+#endif
+    dev->esp_gain = -1;
+
+    esp_rtl_sdr_config_t config;
+    esp_rtl_sdr_config_default(&config);
+    config.event_cb = esp_sdr_event_cb;
+    config.event_ctx = dev;
+    config.delivery_mode = ESP_RTL_SDR_DELIVERY_READ; // rtl_433 pulls, like a socket
+    esp_err_t err = esp_rtl_sdr_install(&config, &dev->esp_dev);
+    if (err != ESP_OK) {
+        print_logf(LOG_ERROR, __func__, "esp_rtl_sdr_install failed: %s", esp_rtl_sdr_err_to_name(err));
+        free(dev);
+        return -1;
+    }
+
+    // The dongle enumerates asynchronously after the host library starts
+    esp_rtl_sdr_device_info_t info = {0};
+    int waited_ms = 0;
+    while (esp_rtl_sdr_get_device_info(dev->esp_dev, &info) != ESP_OK || !info.present) {
+        if (waited_ms >= ESP_SDR_ATTACH_WAIT_MS) {
+            print_log(LOG_ERROR, __func__, "No supported RTL-SDR dongle on the USB host port");
+            esp_rtl_sdr_uninstall(dev->esp_dev);
+            free(dev);
+            return -1;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+        waited_ms += 100;
+    }
+
+    // "esp:SERIAL" picks one dongle when several share a hub
+    char const *serial = arg_param(dev_query);
+    if (serial && *serial) {
+        err = esp_rtl_sdr_select_device_serial(dev->esp_dev, serial);
+        if (err != ESP_OK)
+            print_logf(LOG_WARNING, __func__, "No dongle with serial %s (%s); using the first one",
+                    serial, esp_rtl_sdr_err_to_name(err));
+        esp_rtl_sdr_get_device_info(dev->esp_dev, &info);
+    }
+
+    print_logf(LOG_CRITICAL, "SDR", "Using USB device: %s, %s, SN: %s", info.manufacturer, info.product, info.serial);
+    dev->sample_size = sizeof(uint8_t) * 2; // CU8
+    dev->sample_signed = 0;
+
+    size_t info_len = 41 + strlen(info.manufacturer) + strlen(info.product) + strlen(info.serial);
+    dev->dev_info = malloc(info_len);
+    if (dev->dev_info)
+        snprintf(dev->dev_info, info_len, "{\"vendor\":\"%s\", \"product\":\"%s\", \"serial\":\"%s\"}",
+                info.manufacturer, info.product, info.serial);
+
+    *out_dev = dev;
+    return 0;
+}
+
+// Gain can only be written once the interface is claimed, i.e. after the stream starts
+static void esp_sdr_apply_gain(sdr_dev_t *dev)
+{
+    esp_err_t err;
+    if (dev->esp_gain < 0)
+        err = esp_rtl_sdr_set_tuner_gain_mode(dev->esp_dev, ESP_RTL_SDR_GAIN_MODE_AUTO);
+    else
+        err = esp_rtl_sdr_set_tuner_gain(dev->esp_dev, dev->esp_gain);
+    if (err != ESP_OK)
+        print_logf(LOG_WARNING, "SDR", "Setting tuner gain failed: %s", esp_rtl_sdr_err_to_name(err));
+}
+
+static int esp_sdr_start_stream(sdr_dev_t *dev)
+{
+    uint32_t freq = dev->esp_freq ? dev->esp_freq : ESP_SDR_DEFAULT_FREQ;
+    uint32_t rate = dev->esp_rate ? dev->esp_rate : ESP_SDR_DEFAULT_RATE;
+    if (dev->esp_ppm)
+        esp_rtl_sdr_set_freq_correction(dev->esp_dev, dev->esp_ppm);
+    esp_err_t err = esp_rtl_sdr_start_hz(dev->esp_dev, freq, rate);
+    if (err != ESP_OK) {
+        print_logf(LOG_ERROR, "SDR", "Starting the USB stream at %u Hz, %u S/s failed: %s",
+                freq, rate, esp_rtl_sdr_err_to_name(err));
+        return -1;
+    }
+    dev->esp_streaming = 1;
+    esp_sdr_apply_gain(dev);
+    return 0;
+}
+
+static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_num, uint32_t buf_len)
+{
+    size_t buffer_size = (size_t)buf_num * buf_len;
+    if (dev->buffer_size != buffer_size) {
+        free(dev->buffer);
+        dev->buffer = malloc(buffer_size);
+        if (!dev->buffer) {
+            WARN_MALLOC("esp_sdr_read_loop()");
+            return -1;
+        }
+        dev->buffer_size = buffer_size;
+        dev->buffer_pos = 0;
+    }
+
+    if (!dev->esp_streaming && esp_sdr_start_stream(dev) < 0)
+        return -1;
+
+    dev->running = 1;
+    do {
+        if (dev->buffer_pos + buf_len > buffer_size)
+            dev->buffer_pos = 0;
+        uint8_t *buffer = &dev->buffer[dev->buffer_pos];
+        dev->buffer_pos += buf_len;
+
+        size_t n_read = 0;
+        int exit_acquire = 0;
+        while (n_read < buf_len) {
+#ifdef THREADS
+            pthread_mutex_lock(&dev->lock);
+            exit_acquire = dev->exit_acquire;
+            pthread_mutex_unlock(&dev->lock);
+#endif
+            if (exit_acquire || !dev->running)
+                break;
+            size_t got = 0;
+            esp_err_t err = esp_rtl_sdr_read(dev->esp_dev, &buffer[n_read], buf_len - n_read,
+                    ESP_SDR_READ_TIMEOUT_MS, &got);
+            if (err == ESP_OK) {
+                n_read += got;
+            }
+            else if (err == ESP_RTL_SDR_ERR_NOT_STREAMING && dev->esp_streaming) {
+                vTaskDelay(pdMS_TO_TICKS(10)); // a rate change is restarting the stream
+            }
+            else if (err != ESP_RTL_SDR_ERR_TIMEOUT && err != ESP_ERR_TIMEOUT) {
+                // Unplugged or faulted. Stop delivering; rtl_433's stall watchdog restarts the input.
+                print_logf(LOG_WARNING, "SDR", "USB read failed: %s", esp_rtl_sdr_err_to_name(err));
+                dev->running = 0;
+                break;
+            }
+            // on timeout just go round: no samples yet, check exit_acquire again
+        }
+        if (exit_acquire)
+            break;
+
+#ifdef THREADS
+        pthread_mutex_lock(&dev->lock);
+#endif
+        uint32_t sample_rate      = dev->sample_rate;
+        uint32_t center_frequency = dev->center_frequency;
+#ifdef THREADS
+        pthread_mutex_unlock(&dev->lock);
+#endif
+        sdr_event_t ev = {
+                .ev               = SDR_EV_DATA,
+                .sample_rate      = sample_rate,
+                .center_frequency = center_frequency,
+                .buf              = buffer,
+                .len              = n_read,
+        };
+        if (n_read > 0)
+            cb(&ev, ctx);
+    } while (dev->running);
+
+    return 0;
+}
+
+#endif /* ESP_RTL_SDR */
+
 /* Public API */
 
 int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
 {
     if (dev_query && !strncmp(dev_query, "rtl_tcp", 7))
         return rtltcp_open(out_dev, dev_query, verbose);
+
+#ifdef ESP_RTL_SDR
+    /* The USB host dongle is the only local input on the ESP32 */
+    return esp_sdr_open(out_dev, dev_query, verbose);
+#endif
 
 #if !defined(RTLSDR) && !defined(SOAPYSDR)
     if (verbose)
@@ -1162,6 +1386,14 @@ int sdr_close(sdr_dev_t *dev)
 
     if (dev->rtl_tcp)
         ret = rtltcp_close(dev->rtl_tcp);
+
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev) {
+        esp_rtl_sdr_stop(dev->esp_dev, 0);
+        dev->esp_streaming = 0;
+        ret = esp_rtl_sdr_uninstall(dev->esp_dev) == ESP_OK ? 0 : -1;
+    }
+#endif
 
 #ifdef SOAPYSDR
     if (dev->soapy_dev)
@@ -1226,6 +1458,14 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
         r = rtltcp_command(dev, RTLTCP_SET_FREQ, freq);
     }
 
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev) {
+        dev->esp_freq = freq;
+        // idle: remembered for the stream start; streaming: a hot retune between bulk transfers
+        r = esp_rtl_sdr_set_center_freq(dev->esp_dev, freq) == ESP_OK ? 0 : -1;
+    }
+#endif
+
 #ifdef SOAPYSDR
     SoapySDRKwargs args = {0};
     if (dev->soapy_dev) {
@@ -1266,6 +1506,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
     if (dev->rtl_tcp)
         return dev->rtl_tcp_freq;
 
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev) {
+        uint32_t hz = 0;
+        esp_rtl_sdr_get_center_freq(dev->esp_dev, &hz);
+        return hz ? hz : dev->esp_freq;
+    }
+#endif
+
 #ifdef SOAPYSDR
     if (dev->soapy_dev)
         return (uint32_t)SoapySDRDevice_getFrequency(dev->soapy_dev, SOAPY_SDR_RX, 0);
@@ -1295,6 +1543,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
 
     if (dev->rtl_tcp)
         r = rtltcp_command(dev, RTLTCP_SET_FREQ_CORRECTION, ppm);
+
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev) {
+        dev->esp_ppm = ppm;
+        r = esp_rtl_sdr_set_freq_correction(dev->esp_dev, ppm) == ESP_OK ? 0 : -1;
+    }
+#endif
 
 #ifdef SOAPYSDR
     if (dev->soapy_dev)
@@ -1334,6 +1589,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
 
     if (dev->rtl_tcp)
         r = rtltcp_command(dev, RTLTCP_SET_GAIN_MODE, 0);
+
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev) {
+        dev->esp_gain = -1;
+        r = 0;
+        if (dev->esp_streaming)
+            esp_sdr_apply_gain(dev);
+    }
+#endif
 
 #ifdef SOAPYSDR
     if (dev->soapy_dev)
@@ -1389,6 +1653,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
         return rtltcp_command(dev, RTLTCP_SET_GAIN_MODE, 1)
                 || rtltcp_command(dev, RTLTCP_SET_GAIN, gain);
     }
+
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev) {
+        dev->esp_gain = gain;
+        if (dev->esp_streaming)
+            esp_sdr_apply_gain(dev);
+        if (verbose)
+            print_logf(LOG_NOTICE, "SDR", "Tuner gain set to %f dB.", gain / 10.0);
+        return 0;
+    }
+#endif
 
 #ifdef RTLSDR
     /* Enable manual gain */
@@ -1479,6 +1754,25 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
         r = rtltcp_command(dev, RTLTCP_SET_SAMPLE_RATE, rate);
     }
 
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev) {
+        if (!esp_rtl_sdr_is_rate_supported(rate)) {
+            print_logf(LOG_ERROR, "SDR", "%u S/s is not supported (use 225k-300k or 900k-3.2M)", rate);
+            r = -1;
+        }
+        else if (dev->esp_streaming && rate != dev->esp_rate) {
+            // The driver can't change rate mid-stream: restart it; the reader waits it out
+            dev->esp_rate = rate;
+            esp_rtl_sdr_stop(dev->esp_dev, 0);
+            r = esp_sdr_start_stream(dev);
+        }
+        else {
+            dev->esp_rate = rate;
+            r = dev->esp_streaming ? 0 : (esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) == ESP_OK ? 0 : -1);
+        }
+    }
+#endif
+
 #ifdef SOAPYSDR
     if (dev->soapy_dev)
         r = SoapySDRDevice_setSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0, (double)rate);
@@ -1514,6 +1808,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
 
     if (dev->rtl_tcp)
         return dev->rtl_tcp_rate;
+
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev)
+        return dev->esp_rate;
+#endif
 
 #ifdef SOAPYSDR
     if (dev->soapy_dev)
@@ -1712,6 +2011,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
     if (dev->rtl_tcp)
         return rtltcp_read_loop(dev, cb, ctx, buf_num, buf_len);
 
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev)
+        return esp_sdr_read_loop(dev, cb, ctx, buf_num, buf_len);
+#endif
+
 #ifdef SOAPYSDR
     if (dev->soapy_dev)
         return soapysdr_read_loop(dev, cb, ctx, buf_num, buf_len);
@@ -1734,6 +2038,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
         dev->running = 0;
         return 0;
     }
+
+#ifdef ESP_RTL_SDR
+    if (dev->esp_dev) {
+        dev->running = 0;
+        return 0;
+    }
+#endif
 
 #ifdef SOAPYSDR
     if (dev->soapy_dev) {

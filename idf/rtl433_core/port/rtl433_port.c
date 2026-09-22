@@ -17,6 +17,17 @@ static const char *const TAG = "rtl_433";
 
 volatile int rtl433_port_exit_code = -1;
 
+static rtl433_port_log_sink_t log_sink = NULL;
+
+void rtl433_port_set_log_sink(rtl433_port_log_sink_t sink) { log_sink = sink; }
+
+void rtl433_port_log(int level, char const *src, char const *msg) {
+  if (log_sink != NULL)
+    log_sink(level, src, msg);
+  else
+    ESP_LOGI(TAG, "%s: %s", src, msg);
+}
+
 void rtl433_port_exit(int code) {
   rtl433_port_exit_code = code;
   ESP_LOGE(TAG, "rtl_433 exited with code %d", code);

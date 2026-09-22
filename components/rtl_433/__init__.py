@@ -9,6 +9,7 @@ from esphome.components.esp32 import (
     idf_version,
 )
 import esphome.config_validation as cv
+import esphome.final_validate as fv
 from esphome.const import CONF_ID, CONF_PORT
 
 DEPENDENCIES = ["network"]
@@ -65,8 +66,19 @@ CONFIG_SCHEMA = cv.All(
 )
 
 
+def _final_validate(config):
+    # rtl_433 keeps ~4 MB of sample buffers; the P4 boards this targets have 32 MB of PSRAM
+    if "psram" not in fv.full_config.get():
+        raise cv.Invalid("rtl_433 needs PSRAM: add a psram: block (mode: hex, speed: 200MHz on the P4)")
+    return config
+
+
+FINAL_VALIDATE_SCHEMA = _final_validate
+
+
 def _rtl433_args(config):
-    args = ["rtl_433", "-d", "esp", "-F", f"http:0.0.0.0:{config[CONF_PORT]}"]
+    # -D restart: rtl_433's stall watchdog reopens the dongle (e.g. after it is replugged) instead of quitting
+    args = ["rtl_433", "-d", "esp", "-D", "restart", "-F", f"http:0.0.0.0:{config[CONF_PORT]}"]
     args += ["-M", "time:iso:usec:tz", "-M", "protocol", "-M", "level"]
     for freq in config[CONF_FREQUENCIES]:
         args += ["-f", str(int(freq))]
@@ -93,3 +105,9 @@ async def to_code(config):
     esp32.include_builtin_idf_component("pthread")
     # rtl_433's acquire thread is a pthread; its decoders need more than the 3 KB default
     add_idf_sdkconfig_option("CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT", 16384)
+    # Its sample buffers (15 x 256 KB) come from plain malloc(), so malloc must reach PSRAM
+    add_idf_sdkconfig_option("CONFIG_SPIRAM_USE_MALLOC", True)
+    # HTTP listener(s), Mongoose's internal socket pair, one WebSocket per Home Assistant hub, plus the API
+    add_idf_sdkconfig_option("CONFIG_LWIP_MAX_SOCKETS", 16)
+    # esp_rtl_sdr's descriptor and tuner transfers (its P4 reference config uses 1024)
+    add_idf_sdkconfig_option("CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE", 1024)

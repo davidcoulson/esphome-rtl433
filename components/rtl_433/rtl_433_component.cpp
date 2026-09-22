@@ -1,5 +1,6 @@
 #include "rtl_433_component.h"
 
+
 #include "esphome/components/network/util.h"
 #include "esphome/core/log.h"
 
@@ -9,6 +10,19 @@ namespace esphome::rtl_433 {
 
 static const char *const TAG = "rtl_433";
 static constexpr uint32_t TASK_STACK = 32768;
+
+// rtl_433 levels: 1 fatal, 2 critical, 3 error, 4 warning, 5 notice, 6 info, 7 debug, 8 trace
+static void log_sink(int level, char const *src, char const *msg) {
+  if (level <= 3) {
+    ESP_LOGE(TAG, "%s: %s", src, msg);
+  } else if (level == 4) {
+    ESP_LOGW(TAG, "%s: %s", src, msg);
+  } else if (level <= 6) {
+    ESP_LOGI(TAG, "%s: %s", src, msg);
+  } else {
+    ESP_LOGD(TAG, "%s: %s", src, msg);
+  }
+}
 
 void Rtl433Component::setup() {}
 
@@ -25,6 +39,7 @@ void Rtl433Component::loop() {
 
 void Rtl433Component::task_entry(void *arg) {
   auto *self = static_cast<Rtl433Component *>(arg);
+  rtl433_port_set_log_sink(log_sink);
   std::vector<char *> argv;
   for (auto &a : self->args_)
     argv.push_back(a.data());
