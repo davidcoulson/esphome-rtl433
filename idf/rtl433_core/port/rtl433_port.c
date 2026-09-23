@@ -29,6 +29,10 @@ void rtl433_port_set_main_task(void) { main_task = xTaskGetCurrentTaskHandle(); 
 int rtl433_port_on_main_task(void) { return main_task == NULL || xTaskGetCurrentTaskHandle() == main_task; }
 void rtl433_port_count_event(void) { rtl433_port_events++; }
 
+static TaskHandle_t acquire_task = NULL;
+void rtl433_port_note_acquire_task(void) { acquire_task = xTaskGetCurrentTaskHandle(); }
+int rtl433_port_on_acquire_task(void) { return acquire_task != NULL && xTaskGetCurrentTaskHandle() == acquire_task; }
+
 static rtl433_port_log_sink_t log_sink = NULL;
 
 void rtl433_port_set_log_sink(rtl433_port_log_sink_t sink) { log_sink = sink; }

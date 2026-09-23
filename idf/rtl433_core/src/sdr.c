@@ -1512,10 +1512,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
         return -1;
 
 #ifdef THREADS
+#ifdef ESP_RTL_SDR
+    // esp-idf's pthread_self() aborts when called from a task that was never pthread_create()'d, which
+    // is every synchronous caller of this function on this port; track the acquire task ourselves instead
+    if (rtl433_port_on_acquire_task()) {
+        print_log(LOG_ERROR, __func__, "must not be called from acquire callback!");
+        return -1;
+    }
+#else
     if (pthread_equal(dev->thread, pthread_self())) {
         fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
         return -1;
     }
+#endif
 #endif
 
     int r = -1;
@@ -1607,10 +1616,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
         return -1;
 
 #ifdef THREADS
+#ifdef ESP_RTL_SDR
+    // esp-idf's pthread_self() aborts when called from a task that was never pthread_create()'d, which
+    // is every synchronous caller of this function on this port; track the acquire task ourselves instead
+    if (rtl433_port_on_acquire_task()) {
+        print_log(LOG_ERROR, __func__, "must not be called from acquire callback!");
+        return -1;
+    }
+#else
     if (pthread_equal(dev->thread, pthread_self())) {
         fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
         return -1;
     }
+#endif
 #endif
 
     int r = -1;
@@ -1653,10 +1671,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
         return -1;
 
 #ifdef THREADS
+#ifdef ESP_RTL_SDR
+    // esp-idf's pthread_self() aborts when called from a task that was never pthread_create()'d, which
+    // is every synchronous caller of this function on this port; track the acquire task ourselves instead
+    if (rtl433_port_on_acquire_task()) {
+        print_log(LOG_ERROR, __func__, "must not be called from acquire callback!");
+        return -1;
+    }
+#else
     if (pthread_equal(dev->thread, pthread_self())) {
         fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
         return -1;
     }
+#endif
 #endif
 
     int r = -1;
@@ -1698,10 +1725,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
         return -1;
 
 #ifdef THREADS
+#ifdef ESP_RTL_SDR
+    // esp-idf's pthread_self() aborts when called from a task that was never pthread_create()'d, which
+    // is every synchronous caller of this function on this port; track the acquire task ourselves instead
+    if (rtl433_port_on_acquire_task()) {
+        print_log(LOG_ERROR, __func__, "must not be called from acquire callback!");
+        return -1;
+    }
+#else
     if (pthread_equal(dev->thread, pthread_self())) {
         fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
         return -1;
     }
+#endif
 #endif
 
     int r = -1;
@@ -1815,10 +1851,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
         return -1;
 
 #ifdef THREADS
+#ifdef ESP_RTL_SDR
+    // esp-idf's pthread_self() aborts when called from a task that was never pthread_create()'d, which
+    // is every synchronous caller of this function on this port; track the acquire task ourselves instead
+    if (rtl433_port_on_acquire_task()) {
+        print_log(LOG_ERROR, __func__, "must not be called from acquire callback!");
+        return -1;
+    }
+#else
     if (pthread_equal(dev->thread, pthread_self())) {
         fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
         return -1;
     }
+#endif
 #endif
 
     int r = -1;
@@ -2183,6 +2228,9 @@ void sdr_redirect_logging(void)
 static THREAD_RETURN THREAD_CALL acquire_thread(void *arg)
 {
     sdr_dev_t *dev = arg;
+#ifdef ESP_RTL_SDR
+    rtl433_port_note_acquire_task(); // record our identity before anything below can call back into a setter
+#endif
     print_log(LOG_DEBUG, __func__, "acquire_thread enter...");
 
     int r = sdr_start_sync(dev, dev->async_cb, dev->async_ctx, dev->buf_num, dev->buf_len);
@@ -2234,10 +2282,19 @@ int sdr_stop(sdr_dev_t *dev)
     if (!dev)
         return -1;
 
+#ifdef ESP_RTL_SDR
+    // esp-idf's pthread_self() aborts when called from a task that was never pthread_create()'d, which
+    // is every synchronous caller of this function on this port; track the acquire task ourselves instead
+    if (rtl433_port_on_acquire_task()) {
+        print_log(LOG_ERROR, __func__, "must not be called from acquire callback!");
+        return -1;
+    }
+#else
     if (pthread_equal(dev->thread, pthread_self())) {
         fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
         return -1;
     }
+#endif
 
     print_log(LOG_DEBUG, __func__, "EXITING...");
     pthread_mutex_lock(&dev->lock);

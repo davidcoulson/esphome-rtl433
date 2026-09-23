@@ -25,6 +25,14 @@ extern uint8_t rtl433_port_usb_task_core;  // 0xFF = no affinity
 // True on the task that runs rtl_433_main() (recorded when it starts)
 int rtl433_port_on_main_task(void);
 
+// upstream rtl_433's sdr.c guards its setters with pthread_equal(dev->thread, pthread_self()) to
+// refuse a call made from inside the acquire callback. On desktop every thread is a pthread, so
+// pthread_self() is always safe; on ESP-IDF our own main/decode task is a plain FreeRTOS task (never
+// pthread_create()'d), and esp-idf's pthread_self() asserts outright when called from one. Track the
+// acquire thread's FreeRTOS handle ourselves instead of going through POSIX identity at all.
+void rtl433_port_note_acquire_task(void);
+int rtl433_port_on_acquire_task(void);
+
 // Counts decoded events (src/r_api.c)
 void rtl433_port_count_event(void);
 
