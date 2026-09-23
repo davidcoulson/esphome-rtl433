@@ -1318,9 +1318,15 @@ static int start_sdr(r_cfg_t *cfg)
     if (r < 0) {
         return -1; // exit(2);
     }
+#ifdef ESP_RTL_SDR
+    print_log(LOG_CRITICAL, "checkpoint", "after sdr_open");
+#endif
     cfg->dev_info = sdr_get_dev_info(cfg->dev);
     cfg->demod->sample_size = sdr_get_sample_size(cfg->dev);
     // cfg->demod->sample_signed = sdr_get_sample_signed(cfg->dev);
+#ifdef ESP_RTL_SDR
+    print_log(LOG_CRITICAL, "checkpoint", "after dev_info/sample_size getters");
+#endif
 
     /* Set the sample rate */
     if (cfg->hop_rates > 1) {
@@ -1329,35 +1335,59 @@ static int start_sdr(r_cfg_t *cfg)
         cfg->samp_rate = cfg->hop_rate[rate_index];
     }
     sdr_set_sample_rate(cfg->dev, cfg->samp_rate, 1); // always verbose
+#ifdef ESP_RTL_SDR
+    print_log(LOG_CRITICAL, "checkpoint", "after sdr_set_sample_rate");
+#endif
 
     if (cfg->verbosity || cfg->demod->level_limit < 0.0) {
         print_logf(LOG_NOTICE, "Input", "Bit detection level set to %.1f%s.", cfg->demod->level_limit, (cfg->demod->level_limit < 0.0 ? "" : " (Auto)"));
     }
 
     sdr_apply_settings(cfg->dev, cfg->settings_str, 1); // always verbose for soapy
+#ifdef ESP_RTL_SDR
+    print_log(LOG_CRITICAL, "checkpoint", "after sdr_apply_settings");
+#endif
 
     /* Enable automatic gain if gain_str empty (or 0 for RTL-SDR), set manual gain otherwise */
     sdr_set_tuner_gain(cfg->dev, cfg->gain_str, 1); // always verbose
+#ifdef ESP_RTL_SDR
+    print_log(LOG_CRITICAL, "checkpoint", "after sdr_set_tuner_gain");
+#endif
 
     if (cfg->ppm_error) {
         sdr_set_freq_correction(cfg->dev, cfg->ppm_error, 1); // always verbose
     }
+#ifdef ESP_RTL_SDR
+    print_log(LOG_CRITICAL, "checkpoint", "after sdr_set_freq_correction (or skipped)");
+#endif
 
     /* Reset endpoint before we start reading from it (mandatory) */
     r = sdr_reset(cfg->dev, cfg->verbosity);
     if (r < 0) {
         print_log(LOG_ERROR, "Input", "Failed to reset buffers.");
     }
+#ifdef ESP_RTL_SDR
+    print_log(LOG_CRITICAL, "checkpoint", "after sdr_reset");
+#endif
     sdr_activate(cfg->dev);
+#ifdef ESP_RTL_SDR
+    print_log(LOG_CRITICAL, "checkpoint", "after sdr_activate");
+#endif
 
     if (cfg->verbosity) {
         print_log(LOG_NOTICE, "Input", "Reading samples in async mode...");
     }
 
     sdr_set_center_freq(cfg->dev, cfg->center_frequency, 1); // always verbose
+#ifdef ESP_RTL_SDR
+    print_log(LOG_CRITICAL, "checkpoint", "after sdr_set_center_freq, calling sdr_start (pthread_create) next");
+#endif
 
     r = sdr_start(cfg->dev, acquire_callback, (void *)get_mgr(cfg),
             DEFAULT_ASYNC_BUF_NUMBER, cfg->out_block_size);
+#ifdef ESP_RTL_SDR
+    print_logf(LOG_CRITICAL, "checkpoint", "sdr_start (pthread_create) returned %d", r);
+#endif
     if (r < 0) {
         print_logf(LOG_ERROR, "Input", "async start failed (%d).", r);
     }
