@@ -638,9 +638,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
 }
 
 /** Pass the data structure to all output handlers. Frees data afterwards. */
+#ifdef ESP_RTL_SDR
+void rtl433_port_count_event(void); // port/rtl433_port.c, feeds the ESPHome decoded_events sensor
+#endif
+
 void data_acquired_handler(r_device *r_dev, data_t *data)
 {
     r_cfg_t *cfg = r_dev->output_ctx;
+#ifdef ESP_RTL_SDR
+    rtl433_port_count_event();
+#endif
 
 #ifndef NDEBUG
     // check for undeclared csv fields
