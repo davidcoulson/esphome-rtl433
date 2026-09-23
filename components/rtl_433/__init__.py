@@ -30,8 +30,11 @@ CONF_GAIN = "gain"
 CONF_PPM_ERROR = "ppm_error"
 CONF_EXTRA_ARGS = "extra_args"
 
-ESP_RTL_SDR_REPO = "https://github.com/hardcoreerik/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "v0.8.0-rc3"
+# TEMPORARY soak-test override: fork branch enabling ESP_RTL_SDR_CAP_GAIN for
+# NooelecSmartV5 (see davidcoulson/esp-rtl-sdr@nooelec-gain-cap-test). Revert to
+# upstream once confirmed on hardware -- do not merge to main like this.
+ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
+ESP_RTL_SDR_REF = "nooelec-gain-cap-test"
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
