@@ -30,8 +30,13 @@ CONF_GAIN = "gain"
 CONF_PPM_ERROR = "ppm_error"
 CONF_EXTRA_ARGS = "extra_args"
 
-ESP_RTL_SDR_REPO = "https://github.com/hardcoreerik/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "v0.8.0-rc3"
+# Pinned to a fork of esp_rtl_sdr v0.8.0-rc3 until upstream picks up the R820T2 band-select fix:
+# upstream's R820T2 (Blog V3 / Nooelec SMArt v5) path never programs the tuner's RF mux / tracking
+# filter for the tuned band, so those dongles stream but never see any RF. The fork adds that, plus
+# CAP_GAIN and the measured 3.57 MHz IF for the Nooelec profile. See
+# https://github.com/hardcoreerik/esp-rtl-sdr/issues/25 (and #24 for why 433 MHz uses 1024k, not 250k).
+ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
+ESP_RTL_SDR_REF = "cb9eb0491e17b243a58760a3bec93f6f0c12831d"  # branch nooelec-gain-cap-test
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
