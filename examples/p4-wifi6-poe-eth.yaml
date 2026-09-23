@@ -1,0 +1,97 @@
+# rtl_433 on an ESP32-P4 with an RTL-SDR on the USB host port, serving the Home Assistant
+# rtl_433 integration over rtl_433's own HTTP/WebSocket API.
+#
+# This is the configuration running in the author's house (2026-09-23): a Waveshare-design
+# ESP32-P4-WIFI6-POE-ETH (built-in Ethernet, PoE, USB-A high-speed host port) with a Nooelec
+# NESDR SMArt v5, hopping between 433.92 MHz (Acurite fridge/freezer sensors) and 915 MHz
+# (SCMplus utility meters). One dongle replaces the two-dongle Linux box it used to run on.
+#
+# After flashing: Settings -> Devices & services -> rtl_433 -> Add hub, host = this device's IP,
+# port 8433, path /ws. Devices show up under the hub's "Add discovered devices" once heard.
+
+esphome:
+  name: rtl433
+  friendly_name: RTL433
+
+esp32:
+  variant: esp32p4
+  # Pre-v3 and v3+ P4 silicon are not binary compatible. `esptool chip_id` says which you have;
+  # v1.x needs engineering_sample: true, v3.x must not set it.
+  engineering_sample: true
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+# Required: rtl_433's demodulator buffers and the USB sample ring live here.
+psram:
+  mode: hex
+  speed: 200MHz
+
+logger:
+  level: INFO
+  # The P4's USB-serial/JTAG console can drop out while the USB host stack starts; a real UART
+  # is the reliable place for the boot log.
+  hardware_uart: UART0
+
+api:
+  # Ethernet node: no Wi-Fi reboot timeout, so this is the only automatic recovery from
+  # "link up but unreachable".
+  reboot_timeout: 300s
+
+ota:
+  - platform: esphome
+
+# Required: every event carries a wall-clock timestamp that the HA integration checks
+# against its own clock.
+time:
+  - platform: homeassistant   # or sntp
+
+# ESP32-P4-WIFI6-POE-ETH / ESP32-P4-ETH: IP101 PHY over RMII
+ethernet:
+  type: IP101
+  mdc_pin: GPIO31
+  mdio_pin: GPIO52
+  power_pin: GPIO51
+  clk:
+    mode: CLK_EXT_IN
+    pin: GPIO50
+  phy_addr: 1
+
+external_components:
+  - source: github://davidcoulson/esphome-rtl433@main
+    components: [rtl_433]
+
+rtl_433:
+  # More than one frequency: rtl_433 hops between them. Each band runs only its own decoders.
+  # A sample-rate change on a hop restarts the USB stream (about a second), so keep hops slow.
+  frequencies:
+    - frequency: 433.92MHz
+      sample_rate: 1024k          # not 250k: see README, "Known issues"
+      hop_interval: 60s
+      decoders: [acurite_txr, acurite_606]
+    - frequency: 915MHz
+      sample_rate: 2048k
+      hop_interval: 60s
+      decoders: [scmplus]
+  # Manual gain in dB. Automatic gain is not implemented for R820T2 dongles (Blog V3, Nooelec) in
+  # the USB driver yet; 40 dB is what worked here for both the nearby sensors and a distant meter.
+  gain: 40
+  units: si
+
+  # Diagnostics (all optional). `dropped_samples` climbing means rtl_433 is not keeping up.
+  effective_sample_rate:
+    name: Effective Sample Rate
+  usb_overruns:
+    name: USB Overruns
+  dropped_samples:
+    name: Dropped Samples
+  decoded_events:
+    name: Decoded Events
+  cpu_load_core0:
+    name: CPU Load Core 0
+  cpu_load_core1:
+    name: CPU Load Core 1
+
+sensor:
+  - platform: internal_temperature
+    name: Internal Temperature

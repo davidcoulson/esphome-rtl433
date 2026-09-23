@@ -135,12 +135,19 @@ def _decoder(value):
 
 
 def _sample_rate(value):
-    # esp_rtl_sdr streams 225k-300k or 900k-3.2M S/s; accepts 250000, "250k", "1024k"
+    # esp_rtl_sdr streams 225k-300k or 900k-3.2M S/s; accepts 250000, "250k", "1024k".
+    # The low range is rejected for now: the driver mis-quantizes every rate in it and the stream
+    # never starts (hardcoreerik/esp-rtl-sdr#24). 1024k works fine for 433 MHz OOK sensors.
     if isinstance(value, str) and value.lower().endswith("k"):
         value = float(value[:-1]) * 1000
     value = cv.int_(value)
-    if not (225001 <= value <= 300000 or 900000 <= value <= 3200000):
-        raise cv.Invalid("sample_rate must be 225k-300k or 900k-3.2M S/s")
+    if 225001 <= value <= 300000:
+        raise cv.Invalid(
+            "sample rates of 225k-300k do not work with the current esp_rtl_sdr "
+            "(hardcoreerik/esp-rtl-sdr#24); use 900k-3.2M, e.g. 1024k for 433 MHz"
+        )
+    if not 900000 <= value <= 3200000:
+        raise cv.Invalid("sample_rate must be 900k-3.2M S/s")
     return value
 
 
@@ -175,7 +182,7 @@ CONFIG_SCHEMA = cv.All(
                 cv.ensure_list(_frequency_entry), cv.Length(min=1, max=32)
             ),
             cv.Optional(CONF_HOP_INTERVAL, default="600s"): cv.positive_time_period_seconds,
-            cv.Optional(CONF_SAMPLE_RATE, default=250000): _sample_rate,
+            cv.Optional(CONF_SAMPLE_RATE, default=1024000): _sample_rate,
             # Tuner gain in dB; omitted = automatic
             cv.Optional(CONF_GAIN): cv.float_range(min=0, max=50),
             cv.Optional(CONF_PPM_ERROR, default=0): cv.int_range(min=-200, max=200),

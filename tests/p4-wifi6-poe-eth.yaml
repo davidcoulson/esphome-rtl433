@@ -32,7 +32,7 @@ rtl_433:
   hop_interval: 60s
   frequencies:
     - frequency: 433.92MHz
-      sample_rate: 250k
+      sample_rate: 1024k
       decoders: [acurite_txr, acurite_606]
     - frequency: 915MHz
       sample_rate: 2048k
