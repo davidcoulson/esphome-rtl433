@@ -34,7 +34,7 @@ CONF_EXTRA_ARGS = "extra_args"
 # NooelecSmartV5 (see davidcoulson/esp-rtl-sdr@nooelec-gain-cap-test). Revert to
 # upstream once confirmed on hardware -- do not merge to main like this.
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "e3d99954dbe31f6d6c35cd45632fc418c81b59eb"  # nooelec-gain-cap-test: CAP_GAIN + 3.57 MHz IF
+ESP_RTL_SDR_REF = "cb9eb0491e17b243a58760a3bec93f6f0c12831d"  # nooelec-gain-cap-test: CAP_GAIN + 3.57 MHz IF + R820T2 band select
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
