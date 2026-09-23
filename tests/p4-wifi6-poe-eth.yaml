@@ -17,6 +17,8 @@ external_components:
       path: ../components
 logger:
 api:
+time:
+  - platform: sntp
 ethernet:
   type: IP101
   mdc_pin: GPIO31

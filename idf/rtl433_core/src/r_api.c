@@ -100,6 +100,7 @@ void set_freq_correction(r_cfg_t *cfg, int freq_correction)
 
 void set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
 {
+    cfg->hop_rates = 0; // a rate set by hand applies to every band
     // cfg->samp_rate = sample_rate; // actually applied in the sdr event
     sdr_set_sample_rate(cfg->dev, sample_rate, 0);
 }
@@ -134,21 +135,22 @@ void r_init_cfg(r_cfg_t *cfg)
     list_ensure_size(&cfg->output_handler, 16);
 
     // collect devices list, this should be a module
-    r_device r_devices[] = {
-#define DECL(name) name,
+    // (a table of pointers: copying the 388 r_device values into a local would be a 43 KB stack frame)
+    static r_device const *const r_devices[] = {
+#define DECL(name) &name,
             DEVICES
 #undef DECL
     };
 
     cfg->num_r_devices = sizeof(r_devices) / sizeof(*r_devices);
-    for (unsigned i = 0; i < cfg->num_r_devices; i++) {
-        r_devices[i].protocol_num = i + 1;
-    }
-    cfg->devices = malloc(sizeof(r_devices));
+    cfg->devices = malloc(cfg->num_r_devices * sizeof(r_device));
     if (!cfg->devices)
         FATAL_CALLOC("r_init_cfg()");
 
-    memcpy(cfg->devices, r_devices, sizeof(r_devices));
+    for (int i = 0; i < cfg->num_r_devices; i++) {
+        cfg->devices[i] = *r_devices[i];
+        cfg->devices[i].protocol_num = i + 1;
+    }
 
     cfg->demod = calloc(1, sizeof(*cfg->demod));
     if (!cfg->demod)

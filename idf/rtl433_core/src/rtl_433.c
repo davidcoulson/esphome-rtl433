@@ -1190,6 +1190,9 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
             if (cfg->hop_rate[rate_index] != cfg->samp_rate)
                 sdr_set_sample_rate(cfg->dev, cfg->hop_rate[rate_index], 1);
         }
+#ifdef ESP_RTL_SDR
+        flush_sdr_flow(cfg); // decode the old band's tail with the old band's decoders
+#endif
         sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1);
 #ifdef ESP_RTL_SDR
         rtl433_port_apply_band(cfg); // this band's decoders only
@@ -1431,8 +1434,12 @@ static void timer_handler(struct mg_connection *nc, int ev, void *ev_data)
             }
         }
         if (cfg->dev_state != DEVICE_STATE_STOPPED) {
-            cfg->exit_async = 1;
-            cfg->exit_code = 3;
+            // exit_async is never cleared, so only set it when we mean to quit (upstream sets it here
+            // unconditionally, which makes "-D restart" exit after the restart)
+            if (cfg->dev_mode == DEVICE_MODE_QUIT) {
+                cfg->exit_async = 1;
+                cfg->exit_code = 3;
+            }
             sdr_stop(cfg->dev);
             cfg->dev_state = DEVICE_STATE_STOPPED;
         }
@@ -1921,6 +1928,14 @@ int main(int argc, char **argv) {
     if (cfg->dev_mode != DEVICE_MODE_MANUAL) {
         r = start_sdr(cfg);
         if (r < 0) {
+#ifdef ESP_RTL_SDR
+            if (cfg->dev_mode == DEVICE_MODE_RESTART) {
+                // No dongle yet: keep the HTTP server up and let the watchdog timer retry the open
+                print_log(LOG_WARNING, "Input", "No SDR at start-up; will keep trying");
+                cfg->dev_state = DEVICE_STATE_STOPPED;
+            }
+            else
+#endif
             exit(2);
         }
     }

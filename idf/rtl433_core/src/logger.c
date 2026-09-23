@@ -34,6 +34,10 @@ void print_log(log_level_t level, char const *src, char const *msg)
 #ifdef ESP_RTL_SDR
     // Mirror into the ESPHome logger; stdio on the ESP32 only reaches the serial console
     rtl433_port_log((int)level, src, msg);
+    // The handler pushes into Mongoose (WebSocket/MQTT outputs), which is only safe from the task
+    // that runs mg_mgr_poll(): the USB driver's tasks and the acquire thread stop here
+    if (!rtl433_port_on_main_task())
+        return;
 #endif
     if (logger_handler) {
         logger_handler(level, src, msg, logger_handler_userdata);

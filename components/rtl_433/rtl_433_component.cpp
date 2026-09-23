@@ -12,7 +12,8 @@
 namespace esphome::rtl_433 {
 
 static const char *const TAG = "rtl_433";
-static constexpr uint32_t TASK_STACK = 32768;
+// rtl_433's decode chain (Mongoose poll -> pulse slicer -> decoder -> output formatting) peaks near 50 KB
+static constexpr uint32_t TASK_STACK = 65536;
 
 // rtl_433 levels: 1 fatal, 2 critical, 3 error, 4 warning, 5 notice, 6 info, 7 debug, 8 trace
 static void log_sink(int level, char const *src, char const *msg) {
@@ -52,11 +53,12 @@ void Rtl433Component::loop() {
 
 void Rtl433Component::task_entry(void *arg) {
   auto *self = static_cast<Rtl433Component *>(arg);
+  rtl433_port_set_main_task();
   rtl433_port_set_log_sink(log_sink);
   // rtl_433's acquire thread (created by this task) mostly waits on USB reads: put it with the USB
   // host stack and the ESPHome loop, leaving the decoding core to the decoders
   esp_pthread_cfg_t pcfg = esp_pthread_get_default_config();
-  pcfg.stack_size = 16384;
+  pcfg.stack_size = 24576;
   pcfg.pin_to_core = self->acquire_core_;
   pcfg.thread_name = "rtl_433_acq";
   pcfg.prio = self->acquire_priority_;
@@ -69,18 +71,31 @@ void Rtl433Component::task_entry(void *arg) {
   argv.push_back(nullptr);
   int rc = rtl_433_main(static_cast<int>(argv.size()) - 1, argv.data());
   ESP_LOGE(TAG, "rtl_433 returned %d", rc);
+  rtl433_port_exit_code = rc;
   vTaskDelete(nullptr);
 }
 
 void Rtl433Component::update() {
+  // rtl_433 ending (any exit()) or its task being gone means nothing is decoding; say so
+  if (this->task_ != nullptr && !this->stopped_ &&
+      (rtl433_port_exit_code >= 0 || eTaskGetState(this->task_) == eDeleted)) {
+    this->stopped_ = true;
+    this->status_set_error(LOG_STR("rtl_433 stopped"));
+    ESP_LOGE(TAG, "rtl_433 is no longer running (exit code %d); reboot to recover", rtl433_port_exit_code);
+  }
   rtl433_usb_stats stats{};
-  if (rtl433_port_usb_stats(&stats)) {
+  if (!this->stopped_ && rtl433_port_usb_stats(&stats)) {
+    // The driver's counters restart with every stream start (each rate-change hop): accumulate the deltas
+    this->overruns_total_ += stats.overruns >= this->last_overruns_ ? stats.overruns - this->last_overruns_ : stats.overruns;
+    this->drops_total_ += stats.consumer_drops >= this->last_drops_ ? stats.consumer_drops - this->last_drops_ : stats.consumer_drops;
+    this->last_overruns_ = stats.overruns;
+    this->last_drops_ = stats.consumer_drops;
     if (this->effective_sample_rate_sensor_ != nullptr)
       this->effective_sample_rate_sensor_->publish_state(stats.effective_sps);
     if (this->usb_overruns_sensor_ != nullptr)
-      this->usb_overruns_sensor_->publish_state(stats.overruns);
+      this->usb_overruns_sensor_->publish_state(this->overruns_total_);
     if (this->dropped_samples_sensor_ != nullptr)
-      this->dropped_samples_sensor_->publish_state(stats.consumer_drops);
+      this->dropped_samples_sensor_->publish_state(this->drops_total_);
     ESP_LOGD(TAG, "USB: %u S/s at %u S/s set, %.1f MHz, overruns %u, dropped %u", static_cast<unsigned>(stats.effective_sps),
              static_cast<unsigned>(stats.sample_rate), stats.frequency / 1e6, static_cast<unsigned>(stats.overruns),
              static_cast<unsigned>(stats.consumer_drops));

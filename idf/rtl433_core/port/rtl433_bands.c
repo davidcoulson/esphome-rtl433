@@ -46,10 +46,22 @@ static r_device *find_decoder(r_cfg_t *cfg, char const *token) {
   return NULL;
 }
 
+// Only the built-in decoders take part in band switching; a flex decoder (-X) or anything else the
+// user registered by hand keeps running on every band
+static int is_builtin(r_cfg_t *cfg, r_device *dev) {
+  for (int i = 0; i < cfg->num_r_devices; i++)
+    if (!strcmp(cfg->devices[i].name, dev->name))
+      return 1;
+  return 0;
+}
+
 static void unregister_all(r_cfg_t *cfg) {
   list_t *devs = &cfg->demod->r_devs;
-  while (devs->len > 0)
-    unregister_protocol(cfg, devs->elems[devs->len - 1]);
+  for (size_t i = devs->len; i-- > 0;) {
+    r_device *dev = devs->elems[i];
+    if (dev != NULL && is_builtin(cfg, dev))
+      unregister_protocol(cfg, dev);
+  }
 }
 
 static int register_list(r_cfg_t *cfg, char const *list) {

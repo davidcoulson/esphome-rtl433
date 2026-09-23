@@ -14,7 +14,9 @@ idf_component_register(
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     THREADS ESP_RTL_SDR _GNU_SOURCE
-    MG_ENABLE_FILESYSTEM=1 MG_ENABLE_HTTP_CGI=0 MG_ENABLE_DIRECTORY_LISTING=0 MG_ENABLE_BROADCAST=1)
+    MG_ENABLE_FILESYSTEM=1 MG_ENABLE_HTTP_CGI=0 MG_ENABLE_DIRECTORY_LISTING=0 MG_ENABLE_BROADCAST=1
+    # mg_broadcast's message is one sdr_event_t (28 bytes); the default 8 KB lives on the stack of every caller
+    MG_CTL_MSG_MESSAGE_SIZE=64)
 # Every rtl_433 source sees the port shims (exit() -> task exit, missing POSIX bits)
 # ESPHome builds for size (-Os); the demodulators are tight DSP loops that gain far more from -O2
 target_compile_options(${COMPONENT_LIB} PRIVATE -O2)

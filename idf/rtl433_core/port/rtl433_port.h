@@ -22,6 +22,9 @@ extern size_t rtl433_port_usb_ring_bytes;
 extern uint8_t rtl433_port_usb_task_priority;
 extern uint8_t rtl433_port_usb_task_core;  // 0xFF = no affinity
 
+// True on the task that runs rtl_433_main() (recorded when it starts)
+int rtl433_port_on_main_task(void);
+
 // Counts decoded events (src/r_api.c)
 void rtl433_port_count_event(void);
 

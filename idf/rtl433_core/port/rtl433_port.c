@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +23,10 @@ uint8_t rtl433_port_usb_task_priority = 0;
 uint8_t rtl433_port_usb_task_core = 0xFF;
 
 volatile uint32_t rtl433_port_events = 0;
+
+static TaskHandle_t main_task = NULL;
+void rtl433_port_set_main_task(void) { main_task = xTaskGetCurrentTaskHandle(); }
+int rtl433_port_on_main_task(void) { return main_task == NULL || xTaskGetCurrentTaskHandle() == main_task; }
 void rtl433_port_count_event(void) { rtl433_port_events++; }
 
 static rtl433_port_log_sink_t log_sink = NULL;
@@ -40,7 +45,11 @@ void rtl433_port_exit(int code) {
   ESP_LOGE(TAG, "rtl_433 exited with code %d", code);
   fflush(stdout);
   fflush(stderr);
-  vTaskDelete(NULL);  // only ever called from the rtl_433 task (or its acquire thread)
+  if (!rtl433_port_on_main_task()) {
+    // From the acquire pthread: leave it joinable, otherwise sdr_stop()'s pthread_join() hangs the main task
+    pthread_exit(NULL);
+  }
+  vTaskDelete(NULL);
   for (;;) {
   }
 }

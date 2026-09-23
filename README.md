@@ -2,7 +2,7 @@
 
 An [ESPHome](https://esphome.io) external component that runs **[rtl_433](https://github.com/merbanan/rtl_433) on an ESP32-P4**, with an RTL-SDR dongle on the P4's high-speed USB host port. It serves rtl_433's own HTTP/WebSocket API, so the Home Assistant [rtl_433 integration](https://github.com/rtl-433-hass/rtl_433) connects to it exactly as it would to rtl_433 on a Linux box.
 
-> **Status: experimental — builds, not yet run on hardware.**
+> **Status: experimental — builds and has been through a pre-boot review (stack budget, buffer sizes, USB restart path), not yet run on hardware.**
 
 ## How it fits together
 
@@ -15,7 +15,9 @@ RTL-SDR dongle ──USB 2.0 HS──► esp_rtl_sdr (USB host driver, CU8 I/Q)
 
 - `idf/rtl433_core/`: rtl_433 (pinned upstream commit in `UPSTREAM`) built as an ESP-IDF component. The changes to upstream are in `rtl_433-esp.patch`: an `esp` input backend in `src/sdr.c` and a log hook in `src/logger.c`. Everything else is shimmed from `port/` (`exit()` ends the task instead of rebooting, no TTY, a few POSIX calls lwIP/picolibc lack).
 - [`esp_rtl_sdr`](https://github.com/hardcoreerik/esp-rtl-sdr) (pinned tag) is fetched as an IDF component. It is clean-room, experimental, and treats the Nooelec NESDR SMArt v5 as provisional.
-- `components/rtl_433/`: the ESPHome component. It starts rtl_433 in its own task once the network is up and routes its log into the ESPHome logger.
+- `components/rtl_433/`: the ESPHome component. It starts rtl_433 in its own task (64 KB stack) once the network is up, routes its log into the ESPHome logger, and flags the component as errored if rtl_433 ever exits.
+
+Changes to upstream worth knowing about: the demodulator's four internal buffers are sized to 256 K samples instead of 4 M (36 MB, which no ESP32 has); `-D restart` really restarts (upstream exits after the first watchdog restart); the USB driver stays installed for the life of the firmware, so a replugged dongle is picked up by the driver's own rescan; a missing dongle at boot is retried instead of fatal.
 
 ## Hardware
 
@@ -29,7 +31,7 @@ psram:
   mode: hex
   speed: 200MHz
 
-time:                     # events carry a timestamp; the HA integration drops ones that look stale
+time:                     # required: events carry a timestamp the HA integration checks against its clock
   - platform: sntp
 
 external_components:

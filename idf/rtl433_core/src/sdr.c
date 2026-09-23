@@ -108,6 +108,7 @@ struct sdr_dev {
     int esp_ppm;
     int esp_biastee;              ///< -1 = leave as is
     int esp_digital_agc;          ///< -1 = leave as is
+    int esp_rate_pending;         ///< a sample-rate change waits for the next retune (one stream restart, not two)
     volatile int esp_streaming;
 #endif
 
@@ -1146,6 +1147,10 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
 // The open handle, for the ESPHome component's diagnostics; guarded against a concurrent close
 static pthread_mutex_t esp_active_lock = PTHREAD_MUTEX_INITIALIZER;
 static esp_rtl_sdr_handle_t esp_active = NULL;
+// The driver (and the USB host library under it) is installed once and kept: uninstalling with a device
+// attached fails in the host library, and a re-install after that fails too. A restart or replug only
+// stops and starts the stream; the driver's own rescan handles the dongle coming back.
+static esp_rtl_sdr_handle_t esp_handle = NULL;
 
 int rtl433_port_usb_stats(struct rtl433_usb_stats *out)
 {
@@ -1167,9 +1172,12 @@ int rtl433_port_usb_stats(struct rtl433_usb_stats *out)
     return ok;
 }
 
+static sdr_dev_t *volatile esp_event_dev = NULL; // the open dev the driver's events refer to, if any
+
 static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, void *ctx)
 {
-    sdr_dev_t *dev = ctx;
+    UNUSED(ctx);
+    sdr_dev_t *dev = esp_event_dev;
     switch (event) {
     case ESP_RTL_SDR_EVT_ENUMERATED: {
         esp_rtl_sdr_device_info_t const *info = payload;
@@ -1180,7 +1188,8 @@ static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, voi
     }
     case ESP_RTL_SDR_EVT_DISCONNECTED:
         print_log(LOG_ERROR, "SDR", "USB SDR disconnected");
-        dev->esp_streaming = 0;
+        if (dev)
+            dev->esp_streaming = 0;
         break;
     case ESP_RTL_SDR_EVT_ERROR: {
         esp_rtl_sdr_error_info_t const *err = payload;
@@ -1208,22 +1217,30 @@ static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
     dev->esp_biastee = -1;
     dev->esp_digital_agc = -1;
 
-    esp_rtl_sdr_config_t config;
-    esp_rtl_sdr_config_default(&config);
-    if (rtl433_port_usb_ring_bytes)
-        config.pull_ring_bytes = rtl433_port_usb_ring_bytes;
-    if (rtl433_port_usb_task_priority)
-        config.usb_task_priority = rtl433_port_usb_task_priority;
-    config.usb_task_core_id = rtl433_port_usb_task_core;
-    config.event_cb = esp_sdr_event_cb;
-    config.event_ctx = dev;
-    config.delivery_mode = ESP_RTL_SDR_DELIVERY_READ; // rtl_433 pulls, like a socket
-    esp_err_t err = esp_rtl_sdr_install(&config, &dev->esp_dev);
-    if (err != ESP_OK) {
-        print_logf(LOG_ERROR, __func__, "esp_rtl_sdr_install failed: %s", esp_rtl_sdr_err_to_name(err));
-        free(dev);
-        return -1;
+    if (esp_handle == NULL) {
+        esp_rtl_sdr_config_t config;
+        esp_rtl_sdr_config_default(&config);
+        if (rtl433_port_usb_ring_bytes)
+            config.pull_ring_bytes = rtl433_port_usb_ring_bytes;
+        if (rtl433_port_usb_task_priority)
+            config.usb_task_priority = rtl433_port_usb_task_priority;
+        config.usb_task_core_id = rtl433_port_usb_task_core;
+        config.event_cb = esp_sdr_event_cb;
+        config.event_ctx = NULL; // set per open below: the dev comes and goes, the handle doesn't
+        config.delivery_mode = ESP_RTL_SDR_DELIVERY_READ; // rtl_433 pulls, like a socket
+        if (esp_rtl_sdr_usb_safe_mode_active())
+            print_log(LOG_ERROR, __func__, "USB host is in safe mode after repeated faults; power-cycle to clear");
+        esp_err_t err = esp_rtl_sdr_install(&config, &esp_handle);
+        if (err != ESP_OK) {
+            print_logf(LOG_ERROR, __func__, "esp_rtl_sdr_install failed: %s", esp_rtl_sdr_err_to_name(err));
+            esp_handle = NULL;
+            free(dev);
+            return -1;
+        }
     }
+    dev->esp_dev = esp_handle;
+    esp_event_dev = dev;
+    esp_err_t err;
 
     // The dongle enumerates asynchronously after the host library starts
     esp_rtl_sdr_device_info_t info = {0};
@@ -1231,7 +1248,7 @@ static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
     while (esp_rtl_sdr_get_device_info(dev->esp_dev, &info) != ESP_OK || !info.present) {
         if (waited_ms >= ESP_SDR_ATTACH_WAIT_MS) {
             print_log(LOG_ERROR, __func__, "No supported RTL-SDR dongle on the USB host port");
-            esp_rtl_sdr_uninstall(dev->esp_dev);
+            esp_event_dev = NULL;
             free(dev);
             return -1;
         }
@@ -1289,8 +1306,10 @@ static int esp_sdr_start_stream(sdr_dev_t *dev)
     if (err != ESP_OK) {
         print_logf(LOG_ERROR, "SDR", "Starting the USB stream at %u Hz, %u S/s failed: %s",
                 freq, rate, esp_rtl_sdr_err_to_name(err));
+        dev->esp_streaming = 0; // the reader gives up instead of spinning on NOT_STREAMING
         return -1;
     }
+    dev->esp_rate_pending = 0;
     dev->esp_streaming = 1;
     esp_sdr_apply_gain(dev);
     // Like gain, these need the claimed interface
@@ -1436,9 +1455,10 @@ int sdr_close(sdr_dev_t *dev)
         if (esp_active == dev->esp_dev)
             esp_active = NULL;
         pthread_mutex_unlock(&esp_active_lock);
+        esp_event_dev = NULL;
         esp_rtl_sdr_stop(dev->esp_dev, 0);
         dev->esp_streaming = 0;
-        ret = esp_rtl_sdr_uninstall(dev->esp_dev) == ESP_OK ? 0 : -1;
+        ret = 0; // the driver stays installed (see esp_handle)
     }
 #endif
 
@@ -1508,8 +1528,15 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
 #ifdef ESP_RTL_SDR
     if (dev->esp_dev) {
         dev->esp_freq = freq;
-        // idle: remembered for the stream start; streaming: a hot retune between bulk transfers
-        r = esp_rtl_sdr_set_center_freq(dev->esp_dev, freq) == ESP_OK ? 0 : -1;
+        if (dev->esp_streaming && dev->esp_rate_pending) {
+            // A hop to a band with a different sample rate: one stop/start at the new rate and frequency
+            esp_rtl_sdr_stop(dev->esp_dev, 0);
+            r = esp_sdr_start_stream(dev);
+        }
+        else {
+            // idle: remembered for the stream start; streaming: a hot retune between bulk transfers
+            r = esp_rtl_sdr_set_center_freq(dev->esp_dev, freq) == ESP_OK ? 0 : -1;
+        }
     }
 #endif
 
@@ -1808,10 +1835,11 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
             r = -1;
         }
         else if (dev->esp_streaming && rate != dev->esp_rate) {
-            // The driver can't change rate mid-stream: restart it; the reader waits it out
+            // The driver can't change rate mid-stream. rtl_433 sets the rate and then the frequency on a
+            // hop, so defer: sdr_set_center_freq() restarts the stream once with both
             dev->esp_rate = rate;
-            esp_rtl_sdr_stop(dev->esp_dev, 0);
-            r = esp_sdr_start_stream(dev);
+            dev->esp_rate_pending = 1;
+            r = 0;
         }
         else {
             dev->esp_rate = rate;

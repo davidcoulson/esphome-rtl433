@@ -257,9 +257,13 @@ CONFIG_SCHEMA = cv.All(
 
 
 def _final_validate(config):
-    # rtl_433 keeps ~4 MB of sample buffers; the P4 boards this targets have 32 MB of PSRAM
-    if "psram" not in fv.full_config.get():
+    # rtl_433 keeps ~6 MB of sample buffers; the P4 boards this targets have 32 MB of PSRAM
+    full = fv.full_config.get()
+    if "psram" not in full:
         raise cv.Invalid("rtl_433 needs PSRAM: add a psram: block (mode: hex, speed: 200MHz on the P4)")
+    # Events carry wall-clock timestamps that the Home Assistant integration checks against its own clock
+    if "time" not in full:
+        raise cv.Invalid("rtl_433 needs a time source: add a time: block (e.g. platform: sntp or homeassistant)")
     return config
 
 
