@@ -23,7 +23,7 @@ Changes to upstream rtl_433 worth knowing about: the demodulator's four internal
 
 - **Board:** an ESP32-P4 with the USB 2.0 High-Speed OTG port brought out, plus PSRAM. Verified: Waveshare ESP32-P4-WIFI6-POE-ETH (and its clones): USB-A host port already wired, built-in Ethernet, PoE. The ESP32-P4-ETH works too via its 4-pin USB header. Check your silicon revision with `esptool chip_id`: v1.x needs `engineering_sample: true`, v3.x must not set it.
 - **Dongle:** an RTL2832U dongle that esp_rtl_sdr supports.
-  - Nooelec NESDR SMArt v5 (R820T2): **verified**, with the driver fork: both bands, manual and automatic gain, hot-plug.
+  - Nooelec NESDR SMArt v5 (R820T2): **verified**, with the driver fork: both bands, manual and automatic gain, hot-plug. Side by side with rtl_433 on Linux and the same dongle model it decodes the same 915 MHz utility meters (see [Known issues](#known-issues) for the fixes that took).
   - RTL-SDR Blog V3 (R820T2): same tuner and code path as the Nooelec, so expected to work; being tested next.
   - RTL-SDR Blog V4 (R828D): esp_rtl_sdr's primary, measured profile; not tested by this project yet.
 
@@ -49,7 +49,7 @@ time:                     # required: events carry a timestamp the HA integratio
   - platform: homeassistant
 
 external_components:
-  - source: github://davidcoulson/esphome-rtl433@v0.1.2
+  - source: github://davidcoulson/esphome-rtl433@v0.1.3
     components: [rtl_433]
 
 rtl_433:

@@ -38,10 +38,12 @@ CONF_EXTRA_ARGS = "extra_args"
 # 3.57 MHz IF on the Nooelec, in-place sample-rate change on a hop, a fast sync-read copy, control
 # transfer bounds checks, a USB device layout check, and backports of upstream's bulk-pool leak,
 # halted-endpoint recovery, repeater-before-retune and fault-guard fixes, a fix for a crash when the
-# dongle is unplugged mid-stream, and a retry for a failed USB enumeration. The fork's own fixes are
+# dongle is unplugged mid-stream, a retry for a failed USB enumeration, working R820T2 auto gain, and
+# the tuner's IF filter / IF following the sample rate as librtlsdr does (without it the 915 MHz ISM
+# band was nearly deaf). The fork's own fixes are
 # proposed upstream as hardcoreerik/esp-rtl-sdr#26.
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "74845faede0c8fb6bf2a003884a890616021fb27"  # branch nooelec-gain-cap-test
+ESP_RTL_SDR_REF = "59deff2a7758f0ada99990b3e62a1beaa787aa85"  # branch nooelec-gain-cap-test
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found

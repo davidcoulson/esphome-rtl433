@@ -61,7 +61,7 @@ ethernet:
   phy_addr: 1
 
 external_components:
-  - source: github://davidcoulson/esphome-rtl433@v0.1.2
+  - source: github://davidcoulson/esphome-rtl433@v0.1.3
     components: [rtl_433]
 
 rtl_433:
@@ -76,21 +76,23 @@ rtl_433:
     - frequency: 915MHz
       sample_rate: 2048k
       hop_interval: 150s
-      decoders: [scmplus]
-  # Manual gain in dB. Leave it out for the tuner's automatic gain (LNA + mixer AGC). 40 dB is what
-  # worked here for both the nearby sensors and a distant meter.
-  gain: 40
+      decoders: [scmplus, ert_scm, ert_idm, ert_netidm]   # all four ERT meter formats
+  # Tuner gain in dB. Left out, the tuner's own AGC (LNA + mixer) runs, which is what rtl_433 on a
+  # PC does by default and what hears the most here; set e.g. gain: 40 to pin it.
+  # gain: 40
   units: si
   # rtl_433's HTTP API has no authentication. With remote_control off it answers queries only, so
   # nothing on the network can retune the receiver. Home Assistant's integration works either way;
   # only its optional "manage settings" controls need this on.
   remote_control: false
-  # Uncomment to cut decoding CPU by roughly two thirds on a quiet 2 MS/s band (measured 89% -> 33%
-  # of a core): rtl_433 skips sample blocks below its running noise estimate. A signal right at the
-  # noise floor can be missed.
-  # detector:
-  #   auto_level: true
-  #   squelch: true
+  detector:
+    # Track the noise floor: without it rtl_433 only looks at pulses above -12 dBFS, which hides the
+    # weaker 915 MHz meters. Also feeds Home Assistant's noise sensor.
+    auto_level: true
+    # Uncomment to cut decoding CPU by roughly two thirds on a quiet 2 MS/s band (measured 89% -> 33%
+    # of a core): rtl_433 skips 50 ms sample blocks whose average is below the noise estimate. A short
+    # burst (utility meters are ~3 ms) under ~12 dB SNR can be missed.
+    # squelch: true
 
   # Diagnostics (all optional). `dropped_samples` climbing means rtl_433 is not keeping up.
   effective_sample_rate:
