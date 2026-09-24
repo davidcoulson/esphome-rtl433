@@ -89,13 +89,13 @@ rtl_433:
     # Track the noise floor: without it rtl_433 only looks at pulses above -12 dBFS, which hides the
     # weaker 915 MHz meters. Also feeds Home Assistant's noise sensor.
     auto_level: true
-    # Skip sample blocks below the noise estimate: halves the decoding CPU on a busy 2 MS/s band
-    # (99% -> 47% of a core here) when paired with the 8 ms blocks below (main branch, not yet in a
-    # tagged release: it needs the look-behind that keeps a burst straddling a block boundary whole).
-    # squelch: true
+    # Skip sample pieces below the noise estimate: halves the decoding CPU on a busy 2 MS/s band
+    # (99% -> 40% of a core here). This port judges 8 ms pieces and keeps the previous piece, so a
+    # short meter burst is neither averaged away nor cut in half at a boundary.
+    squelch: true
 
-  # 8 ms sample blocks (default 64 ms) for squelch; see above.
-  # extra_args: ["-b", "32768"]
+  # Do not shrink the USB block size (-b) for squelch: each block is a hand-off between cores, and
+  # eight times as many of them starves the ESPHome loop. The 8 ms granularity comes from the decoder.
 
   # Diagnostics (all optional). `dropped_samples` climbing means rtl_433 is not keeping up.
   effective_sample_rate:
