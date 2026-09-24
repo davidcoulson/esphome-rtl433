@@ -61,7 +61,7 @@ ethernet:
   phy_addr: 1
 
 external_components:
-  - source: github://davidcoulson/esphome-rtl433@v0.1.5
+  - source: github://davidcoulson/esphome-rtl433@v0.1.3
     components: [rtl_433]
 
 rtl_433:
@@ -90,12 +90,12 @@ rtl_433:
     # weaker 915 MHz meters. Also feeds Home Assistant's noise sensor.
     auto_level: true
     # Skip sample blocks below the noise estimate: halves the decoding CPU on a busy 2 MS/s band
-    # (99% -> 47% of a core here). Pair it with the 8 ms blocks below; this port keeps the previous
-    # block so a short burst straddling a block boundary is not cut in half.
-    squelch: true
+    # (99% -> 47% of a core here) when paired with the 8 ms blocks below (main branch, not yet in a
+    # tagged release: it needs the look-behind that keeps a burst straddling a block boundary whole).
+    # squelch: true
 
-  # 8 ms sample blocks (default 64 ms): lets squelch judge short bursts fairly; costs nothing measurable.
-  extra_args: ["-b", "32768"]
+  # 8 ms sample blocks (default 64 ms) for squelch; see above.
+  # extra_args: ["-b", "32768"]
 
   # Diagnostics (all optional). `dropped_samples` climbing means rtl_433 is not keeping up.
   effective_sample_rate:
