@@ -1345,9 +1345,7 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
         return -1;
 
     dev->running = 1;
-    rtl433_port_wdt_subscribe(); // this thread feeds the task watchdog itself (see rtl433_port.h)
     do {
-        rtl433_port_wdt_feed();
         if (dev->buffer_pos + buf_len > buffer_size)
             dev->buffer_pos = 0;
         uint8_t *buffer = &dev->buffer[dev->buffer_pos];
@@ -1401,7 +1399,6 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
         if (n_read > 0)
             cb(&ev, ctx);
     } while (dev->running);
-    rtl433_port_wdt_unsubscribe();
 
     return 0;
 }
