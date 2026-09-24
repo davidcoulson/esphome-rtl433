@@ -21,9 +21,17 @@ static constexpr uint32_t TASK_STACK = 65536;
 
 // rtl_433 levels: 1 fatal, 2 critical, 3 error, 4 warning, 5 notice, 6 info, 7 debug, 8 trace
 static void log_sink(int level, char const *src, char const *msg) {
-  // -Y autolevel reports every noise-floor change as a warning; routine, and frequent on a hopping receiver
-  if (level == 4 && src != nullptr && strcmp(src, "Auto Level") == 0)
+  // -Y autolevel reports every noise-floor change as a warning: routine, and with squelch judging
+  // 8 ms pieces it can fire many times a second. Demote it, and let one through every 10 s at most:
+  // the UART at 115200 baud is a shared, blocking resource and a flood of these stalls the ESPHome loop.
+  if (level == 4 && src != nullptr && strcmp(src, "Auto Level") == 0) {
+    static uint32_t last_auto_level_ms = 0;
+    uint32_t now = millis();
+    if (last_auto_level_ms != 0 && now - last_auto_level_ms < 10000)
+      return;
+    last_auto_level_ms = now;
     level = 6;
+  }
   if (level <= 3) {
     ESP_LOGE(TAG, "%s: %s", src, msg);
   } else if (level == 4) {

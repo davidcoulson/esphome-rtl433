@@ -112,6 +112,24 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
         return 0; // ignore the data
     }
 
+#ifdef ESP_PLATFORM
+    /* Squelch granularity (ESP port). rtl_433 judges a whole input block by its average power, so
+       a ~3 ms meter burst in a 64 ms block is invisible unless it is loud. Smaller USB blocks (-b)
+       fix that but multiply the acquire->decode hand-offs, each a socket round trip on the USB core,
+       which starves the ESPHome loop. So keep the input block and judge it here in 8 ms pieces:
+       each piece runs the normal per-frame path below (squelch decision, look-behind, demod). */
+    #define SQUELCH_PIECE_BYTES 32768u
+    if (demod->squelch_offset > 0 && !demod->squelch_force && len > SQUELCH_PIECE_BYTES
+            && !demod->load_info.format && !demod->analyze_pulses && !demod->dumper.len && !demod->samp_grab) {
+        int events = 0;
+        for (uint32_t off = 0; off < len; off += SQUELCH_PIECE_BYTES) {
+            uint32_t n = len - off < SQUELCH_PIECE_BYTES ? len - off : SQUELCH_PIECE_BYTES;
+            events += push_sdr_flow(cfg, iq_buf + off, n);
+        }
+        return events;
+    }
+#endif
+
     unsigned n_samples = len / demod->sample_size;
     if (n_samples * demod->sample_size != len) {
         print_log(LOG_WARNING, __func__, "Sample buffer length not aligned to sample size!");
@@ -205,7 +223,8 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
             demod->squelch_prev_cap = demod->squelch_prev_iq ? len : 0;
         }
         if (demod->squelch_prev_iq) {
-            memcpy(demod->squelch_prev_iq, iq_buf, len);
+            if (!process_frame) // a processed piece is never replayed: skip the copy
+                memcpy(demod->squelch_prev_iq, iq_buf, len);
             demod->squelch_prev_len    = len;
             demod->squelch_prev_active = !noise_only;
             demod->squelch_prev_done   = process_frame;
