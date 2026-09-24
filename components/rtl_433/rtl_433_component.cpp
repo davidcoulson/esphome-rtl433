@@ -149,9 +149,10 @@ void Rtl433Component::publish_health_() {
   // ESP-IDF's high-water marks are in bytes: the least free stack each task has ever had
   if (this->decode_stack_free_sensor_ != nullptr && this->task_ != nullptr && !this->stopped_)
     this->decode_stack_free_sensor_->publish_state(uxTaskGetStackHighWaterMark(this->task_));
-  auto *acq = static_cast<TaskHandle_t>(rtl433_port_acquire_task_handle());
-  if (this->acquire_stack_free_sensor_ != nullptr && acq != nullptr && !this->stopped_)
-    this->acquire_stack_free_sensor_->publish_state(uxTaskGetStackHighWaterMark(acq));
+  // The acquire thread reports its own mark: it is recreated on every input restart (dongle replug),
+  // and querying a handle that has just been freed is a load fault (seen on a Blog V3 replug).
+  if (this->acquire_stack_free_sensor_ != nullptr && rtl433_port_acquire_stack_free != 0 && !this->stopped_)
+    this->acquire_stack_free_sensor_->publish_state(rtl433_port_acquire_stack_free);
   if (this->heap_free_sensor_ != nullptr)
     this->heap_free_sensor_->publish_state(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
   if (this->psram_free_sensor_ != nullptr)

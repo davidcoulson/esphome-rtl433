@@ -32,6 +32,7 @@ int rtl433_port_on_main_task(void) { return main_task == NULL || xTaskGetCurrent
 void rtl433_port_count_event(void) { rtl433_port_events++; }
 
 static TaskHandle_t acquire_task = NULL;
+volatile unsigned rtl433_port_acquire_stack_free = 0;
 void rtl433_port_note_acquire_task(void) { acquire_task = xTaskGetCurrentTaskHandle(); }
 int rtl433_port_on_acquire_task(void) { return acquire_task != NULL && xTaskGetCurrentTaskHandle() == acquire_task; }
 void *rtl433_port_acquire_task_handle(void) { return acquire_task; }

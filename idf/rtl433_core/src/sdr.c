@@ -1398,6 +1398,15 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
         };
         if (n_read > 0)
             cb(&ev, ctx);
+        // our own stack high-water mark, for the health sensor (see rtl433_port.h)
+        {
+            static TickType_t last_hwm = 0;
+            TickType_t now_ticks = xTaskGetTickCount();
+            if (now_ticks - last_hwm > pdMS_TO_TICKS(1000)) {
+                last_hwm = now_ticks;
+                rtl433_port_acquire_stack_free = (unsigned)uxTaskGetStackHighWaterMark(NULL);
+            }
+        }
     } while (dev->running);
 
     return 0;

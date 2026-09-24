@@ -513,7 +513,7 @@ index c8bb91d..358c25d 100644
          }
      }
 diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
-index 2436821..b24e1f7 100644
+index 2436821..b579c86 100644
 --- a/idf/rtl433_core/src/sdr.c
 +++ b/idf/rtl433_core/src/sdr.c
 @@ -23,6 +23,13 @@
@@ -549,7 +549,7 @@ index 2436821..b24e1f7 100644
      char *dev_info;
  
      int running;
-@@ -1117,6 +1136,275 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
+@@ -1117,6 +1136,284 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
  
  #endif
  
@@ -815,6 +815,15 @@ index 2436821..b24e1f7 100644
 +        };
 +        if (n_read > 0)
 +            cb(&ev, ctx);
++        // our own stack high-water mark, for the health sensor (see rtl433_port.h)
++        {
++            static TickType_t last_hwm = 0;
++            TickType_t now_ticks = xTaskGetTickCount();
++            if (now_ticks - last_hwm > pdMS_TO_TICKS(1000)) {
++                last_hwm = now_ticks;
++                rtl433_port_acquire_stack_free = (unsigned)uxTaskGetStackHighWaterMark(NULL);
++            }
++        }
 +    } while (dev->running);
 +
 +    return 0;
@@ -825,7 +834,7 @@ index 2436821..b24e1f7 100644
  /* Public API */
  
  int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
-@@ -1124,6 +1412,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
+@@ -1124,6 +1421,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
      if (dev_query && !strncmp(dev_query, "rtl_tcp", 7))
          return rtltcp_open(out_dev, dev_query, verbose);
  
@@ -837,7 +846,7 @@ index 2436821..b24e1f7 100644
  #if !defined(RTLSDR) && !defined(SOAPYSDR)
      if (verbose)
          print_log(LOG_ERROR, __func__, "No input drivers (RTL-SDR or SoapySDR) compiled in.");
-@@ -1163,6 +1456,19 @@ int sdr_close(sdr_dev_t *dev)
+@@ -1163,6 +1465,19 @@ int sdr_close(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          ret = rtltcp_close(dev->rtl_tcp);
  
@@ -857,7 +866,7 @@ index 2436821..b24e1f7 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          ret = SoapySDRDevice_unmake(dev->soapy_dev);
-@@ -1213,10 +1519,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1213,10 +1528,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -877,7 +886,7 @@ index 2436821..b24e1f7 100644
  #endif
  
      int r = -1;
-@@ -1226,6 +1541,21 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1226,6 +1550,21 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ, freq);
      }
  
@@ -899,7 +908,7 @@ index 2436821..b24e1f7 100644
  #ifdef SOAPYSDR
      SoapySDRKwargs args = {0};
      if (dev->soapy_dev) {
-@@ -1266,6 +1596,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
+@@ -1266,6 +1605,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_freq;
  
@@ -914,7 +923,7 @@ index 2436821..b24e1f7 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getFrequency(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1285,10 +1623,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+@@ -1285,10 +1632,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -934,7 +943,7 @@ index 2436821..b24e1f7 100644
  #endif
  
      int r = -1;
-@@ -1296,6 +1643,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+@@ -1296,6 +1652,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ_CORRECTION, ppm);
  
@@ -948,7 +957,7 @@ index 2436821..b24e1f7 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setFrequencyComponent(dev->soapy_dev, SOAPY_SDR_RX, 0, "CORR", (double)ppm, NULL);
-@@ -1324,10 +1678,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+@@ -1324,10 +1687,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -968,7 +977,7 @@ index 2436821..b24e1f7 100644
  #endif
  
      int r = -1;
-@@ -1335,6 +1698,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+@@ -1335,6 +1707,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_GAIN_MODE, 0);
  
@@ -984,7 +993,7 @@ index 2436821..b24e1f7 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = soapysdr_auto_gain(dev->soapy_dev, verbose);
-@@ -1360,10 +1732,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+@@ -1360,10 +1741,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1004,7 +1013,7 @@ index 2436821..b24e1f7 100644
  #endif
  
      int r = -1;
-@@ -1390,6 +1771,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+@@ -1390,6 +1780,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
                  || rtltcp_command(dev, RTLTCP_SET_GAIN, gain);
      }
  
@@ -1022,7 +1031,7 @@ index 2436821..b24e1f7 100644
  #ifdef RTLSDR
      /* Enable manual gain */
      r = rtlsdr_set_tuner_gain_mode(dev->rtlsdr_dev, 1);
-@@ -1466,10 +1858,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1466,10 +1867,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1042,7 +1051,7 @@ index 2436821..b24e1f7 100644
  #endif
  
      int r = -1;
-@@ -1479,6 +1880,27 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1479,6 +1889,27 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_SAMPLE_RATE, rate);
      }
  
@@ -1070,7 +1079,7 @@ index 2436821..b24e1f7 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0, (double)rate);
-@@ -1515,6 +1937,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
+@@ -1515,6 +1946,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_rate;
  
@@ -1082,7 +1091,7 @@ index 2436821..b24e1f7 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1539,6 +1966,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
+@@ -1539,6 +1975,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
      if (!sdr_settings || !*sdr_settings)
          return 0;
  
@@ -1113,7 +1122,7 @@ index 2436821..b24e1f7 100644
      if (dev->rtl_tcp) {
          while (sdr_settings && *sdr_settings) {
              char const *val = NULL;
-@@ -1712,6 +2163,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
+@@ -1712,6 +2172,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
      if (dev->rtl_tcp)
          return rtltcp_read_loop(dev, cb, ctx, buf_num, buf_len);
  
@@ -1125,7 +1134,7 @@ index 2436821..b24e1f7 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return soapysdr_read_loop(dev, cb, ctx, buf_num, buf_len);
-@@ -1735,6 +2191,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
+@@ -1735,6 +2200,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
          return 0;
      }
  
@@ -1139,7 +1148,7 @@ index 2436821..b24e1f7 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev) {
          dev->running = 0;
-@@ -1773,6 +2236,9 @@ void sdr_redirect_logging(void)
+@@ -1773,6 +2245,9 @@ void sdr_redirect_logging(void)
  static THREAD_RETURN THREAD_CALL acquire_thread(void *arg)
  {
      sdr_dev_t *dev = arg;
@@ -1149,7 +1158,7 @@ index 2436821..b24e1f7 100644
      print_log(LOG_DEBUG, __func__, "acquire_thread enter...");
  
      int r = sdr_start_sync(dev, dev->async_cb, dev->async_ctx, dev->buf_num, dev->buf_len);
-@@ -1824,10 +2290,19 @@ int sdr_stop(sdr_dev_t *dev)
+@@ -1824,10 +2299,19 @@ int sdr_stop(sdr_dev_t *dev)
      if (!dev)
          return -1;
  

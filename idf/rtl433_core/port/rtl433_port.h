@@ -36,6 +36,10 @@ int rtl433_port_on_acquire_task(void);
 /* Task watchdog: the decoding task subscribes itself (and takes its core's idle task off the
    watch, since a saturated decoder starves idle without being hung) and feeds the watchdog from
    rtl_433's main loop, which returns at least every 500 ms even with no samples. */
+/* The acquire thread's own stack high-water mark (bytes), refreshed by the thread itself about once
+   a second. Read this instead of calling uxTaskGetStackHighWaterMark() on its handle: the thread is
+   recreated on every input restart (dongle replug) and a stale handle is a load fault. */
+extern volatile unsigned rtl433_port_acquire_stack_free;
 void rtl433_port_wdt_subscribe(void);
 void rtl433_port_wdt_feed(void);
 void rtl433_port_wdt_unsubscribe(void); /* a subscribed task must call this before it exits */
