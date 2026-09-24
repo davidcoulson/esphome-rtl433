@@ -49,7 +49,7 @@ time:                     # required: events carry a timestamp the HA integratio
   - platform: homeassistant
 
 external_components:
-  - source: github://davidcoulson/esphome-rtl433@v0.1.1
+  - source: github://davidcoulson/esphome-rtl433@v0.1.2
     components: [rtl_433]
 
 rtl_433:
