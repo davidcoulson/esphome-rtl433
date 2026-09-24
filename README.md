@@ -91,7 +91,7 @@ Per-band sample rates are an addition to rtl_433 (upstream uses one rate for eve
 | `detector:` `fsk_detector` | `-Y auto/classic/minmax` | | FSK pulse detector |
 | `detector:` `level` / `min_level` / `min_snr` | `-Y level= / minlevel= / minsnr=` | | Detection thresholds, dB |
 | `detector:` `auto_level` | `-Y autolevel` | | Track the noise floor (also feeds HA's noise sensor) |
-| `detector:` `squelch` | `-Y squelch` | | Skip blocks below the noise estimate: two thirds less decoding CPU on a quiet 2 MS/s band |
+| `detector:` `squelch` | `-Y squelch` | | Skip sample blocks below the noise estimate: halves the decoding CPU on a 2 MS/s band. Use with `extra_args: ["-b", "32768"]` (8 ms blocks); this port keeps one previous block so bursts straddling a block boundary survive |
 | `detector:` `level_estimator` | `-Y ampest/magest` | | `amplitude` or `magnitude` |
 | `detector:` `fm_filter` | `-Y filter=` | | FM low-pass cutoff |
 | `report_noise` | `-M noise:` | | Noise report interval |
