@@ -82,7 +82,7 @@ Per-band sample rates are an addition to rtl_433 (upstream uses one rate for eve
 | `sample_rate` | `-s` | `250k` | 225k-300k or 900k-3.2M S/s (exactly 900k aliases to 300k and is refused) |
 | `hop_interval` | `-H` | `600s` | Time on each band |
 | `hop_on_event` | `-E hop` | `false` | Move on as soon as something decodes |
-| `gain` | `-g` | automatic | Tuner gain, dB. Omit for the tuner's AGC |
+| `gain` | `-g` | automatic | Tuner gain, dB. Omit for the tuner's AGC (recommended) |
 | `ppm_error` | `-p` | `0` | Frequency correction |
 | `bias_tee` / `digital_agc` | `-t` | unchanged | Antenna power / RTL2832 digital AGC |
 | `decoders` | (per band) | rtl_433 defaults | Decoder names or numbers |
@@ -140,6 +140,9 @@ These are in the USB driver, esp_rtl_sdr v0.8.0-rc3, and reported upstream. The 
 - **R820T2 dongles (Blog V3, Nooelec) streamed but never decoded anything** ([esp-rtl-sdr#25](https://github.com/hardcoreerik/esp-rtl-sdr/issues/25)). The driver's R820T2 path replays a USB capture from a Blog V4 and only retunes the PLL per frequency; the tuner's RF mux and tracking filter stayed on the FM band the capture was taken in, so the ADC saw nothing at 433 or 915 MHz. The fork programs the front end for the tuned band (librtlsdr's R820T band table) after every tune.
 - **Sample rates of 225k-300k failed with `ESP_RTL_SDR_ERR_BAD_RATE`** ([esp-rtl-sdr#24](https://github.com/hardcoreerik/esp-rtl-sdr/issues/24)): the rate quantizer left out librtlsdr's bit-27-into-bit-28 step, so every low-range rate turned into a bogus 450k-900k one. Fixed in the fork; 250k works again.
 - **No manual or automatic gain on the Nooelec profile** (`ESP_RTL_SDR_ERR_UNSUPPORTED`). The fork enables manual gain (the same R820T2 register path as the Blog V3) and adds automatic gain for R820T2 tuners (librtlsdr's recipe: LNA and mixer AGC, VGA 26.5 dB).
+- **The 915 MHz band was nearly deaf, and more gain made it worse.** The replayed init leaves the R820T2's IF filter at librtlsdr's 2.2 MHz setting, which librtlsdr pairs with a 1.75 MHz IF, while the driver tuned and demodulated at a 3.57 MHz IF: the wanted signal sat at the edge of the filter and the image 7 MHz away was barely rejected. Harmless on a quiet band, fatal on the 915 MHz ISM band once the AGC amplified the neighbours. The fork sets the IF filter and IF per sample rate exactly as librtlsdr's `r82xx_set_bandwidth()` does, and retunes. Measured side by side with rtl_433 on a Linux box and the same dongle model: from zero utility-meter decodes in ten minutes to half of Linux's count with 80% of the dwell, including neighbours' meters.
+- **Automatic gain heard nothing** on R820T2 tuners: the replayed init leaves the LNA's power detectors off, so the AGC had nothing to measure and parked at minimum gain. The fork turns them on as librtlsdr's init does. Auto gain is now the recommended setting; it decodes the 433 MHz sensors at ~15 dB better SNR than a fixed 40 dB.
+- **A dongle unplugged mid-stream could crash the board**, and **a dongle whose USB enumeration failed at boot stayed dead** until replugged (about one boot in four here). The fork retires the in-flight transfers on disconnect instead of touching the closing device, and power-cycles the USB port when no device has enumerated for ten seconds.
 - The fork also backports four fixes from upstream's in-progress branch: a bulk transfer pool leaked on every stream restart, a halted bulk endpoint killed the stream instead of recovering, the I2C repeater wasn't opened before a hot retune, and the fault guard's timer lived in RTC_NOINIT memory.
 - Do not pass `-A` (rtl_433's pulse analyzer) in `extra_args`: it puts two full pulse buffers on the stack and overflows the decoding task the moment the first burst arrives.
 
