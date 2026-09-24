@@ -328,8 +328,7 @@ FINAL_VALIDATE_SCHEMA = _final_validate
 def _rtl433_args(config):
     # -D restart: rtl_433's stall watchdog reopens the dongle (e.g. after it is replugged) instead of quitting
     args = ["rtl_433", "-d", "esp", "-D", "restart", "-F", f"http:0.0.0.0:{config[CONF_PORT]}"]
-    # utc: ESP-IDF's strftime("%z") reports +0000 even with TZ set, so local times went out labelled Z
-    args += ["-M", "time:iso:usec:tz:utc", "-M", "protocol", "-M", "level"]
+    args += ["-M", "time:iso:usec:tz", "-M", "protocol", "-M", "level"]
     freqs = config[CONF_FREQUENCIES]
     for entry in freqs:
         args += ["-f", str(int(entry[CONF_FREQUENCY]))]
