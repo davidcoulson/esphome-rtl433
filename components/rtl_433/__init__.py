@@ -37,9 +37,11 @@ CONF_EXTRA_ARGS = "extra_args"
 # (225k-300k) fail BAD_RATE (#24). The fork fixes both and adds: manual + auto gain and the measured
 # 3.57 MHz IF on the Nooelec, in-place sample-rate change on a hop, a fast sync-read copy, control
 # transfer bounds checks, a USB device layout check, and backports of upstream's bulk-pool leak,
-# halted-endpoint recovery, repeater-before-retune and fault-guard fixes.
+# halted-endpoint recovery, repeater-before-retune and fault-guard fixes, a fix for a crash when the
+# dongle is unplugged mid-stream, and a retry for a failed USB enumeration. The fork's own fixes are
+# proposed upstream as hardcoreerik/esp-rtl-sdr#26.
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "ed59c07da0c11c6a8356593b74205cfae58824aa"  # branch nooelec-gain-cap-test
+ESP_RTL_SDR_REF = "74845faede0c8fb6bf2a003884a890616021fb27"  # branch nooelec-gain-cap-test
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
@@ -326,7 +328,8 @@ FINAL_VALIDATE_SCHEMA = _final_validate
 def _rtl433_args(config):
     # -D restart: rtl_433's stall watchdog reopens the dongle (e.g. after it is replugged) instead of quitting
     args = ["rtl_433", "-d", "esp", "-D", "restart", "-F", f"http:0.0.0.0:{config[CONF_PORT]}"]
-    args += ["-M", "time:iso:usec:tz", "-M", "protocol", "-M", "level"]
+    # utc: ESP-IDF's strftime("%z") reports +0000 even with TZ set, so local times went out labelled Z
+    args += ["-M", "time:iso:usec:tz:utc", "-M", "protocol", "-M", "level"]
     freqs = config[CONF_FREQUENCIES]
     for entry in freqs:
         args += ["-f", str(int(entry[CONF_FREQUENCY]))]

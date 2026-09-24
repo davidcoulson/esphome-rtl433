@@ -23,7 +23,7 @@ index e01ca64..1922244 100644
      int duration;
      time_t stop_time;
 diff --git a/idf/rtl433_core/src/http_server.c b/idf/rtl433_core/src/http_server.c
-index d35ae6c..92a3048 100644
+index d35ae6c..a3bc1b8 100644
 --- a/idf/rtl433_core/src/http_server.c
 +++ b/idf/rtl433_core/src/http_server.c
 @@ -525,11 +525,21 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
@@ -48,6 +48,22 @@ index d35ae6c..92a3048 100644
      // Getter
      else if (!strcmp(rpc->method, "get_dev_query")) {
          rpc->response(rpc, 0, cfg->dev_query, 0);
+@@ -689,10 +699,12 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
+     }
+     else if (!strcmp(rpc->method, "gain")) {
+         if (!rpc->arg) {
+-            rpc->response(rpc, -1, "Missing arg", 0);
++            rpc->response(rpc, -1, "Missing arg", 0); // ESP port: upstream fell through to auto gain
++        }
++        else {
++            set_gain_str(cfg, rpc->arg);
++            rpc->response(rpc, 0, "Ok", 0);
+         }
+-        set_gain_str(cfg, rpc->arg);
+-        rpc->response(rpc, 0, "Ok", 0);
+     }
+     else if (!strcmp(rpc->method, "center_frequency")) {
+         set_center_freq(cfg, rpc->val);
 diff --git a/idf/rtl433_core/src/logger.c b/idf/rtl433_core/src/logger.c
 index dce0404..8413209 100644
 --- a/idf/rtl433_core/src/logger.c

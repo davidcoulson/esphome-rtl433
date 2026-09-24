@@ -699,10 +699,12 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
     }
     else if (!strcmp(rpc->method, "gain")) {
         if (!rpc->arg) {
-            rpc->response(rpc, -1, "Missing arg", 0);
+            rpc->response(rpc, -1, "Missing arg", 0); // ESP port: upstream fell through to auto gain
         }
-        set_gain_str(cfg, rpc->arg);
-        rpc->response(rpc, 0, "Ok", 0);
+        else {
+            set_gain_str(cfg, rpc->arg);
+            rpc->response(rpc, 0, "Ok", 0);
+        }
     }
     else if (!strcmp(rpc->method, "center_frequency")) {
         set_center_freq(cfg, rpc->val);

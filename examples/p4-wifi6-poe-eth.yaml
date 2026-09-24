@@ -61,7 +61,7 @@ ethernet:
   phy_addr: 1
 
 external_components:
-  - source: github://davidcoulson/esphome-rtl433@main
+  - source: github://davidcoulson/esphome-rtl433@v0.1.1
     components: [rtl_433]
 
 rtl_433:
