@@ -38,6 +38,7 @@ int rtl433_port_on_acquire_task(void);
    rtl_433's main loop, which returns at least every 500 ms even with no samples. */
 void rtl433_port_wdt_subscribe(void);
 void rtl433_port_wdt_feed(void);
+void rtl433_port_wdt_unsubscribe(void); /* a subscribed task must call this before it exits */
 
 // Counts decoded events (src/r_api.c)
 void rtl433_port_count_event(void);

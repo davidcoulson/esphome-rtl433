@@ -144,3 +144,10 @@ void rtl433_port_wdt_feed(void)
 {
     (void)esp_task_wdt_reset(); // ESP_ERR_NOT_FOUND when not subscribed: harmless
 }
+
+void rtl433_port_wdt_unsubscribe(void)
+{
+    /* A watched task that exits without this leaves a stale entry that never feeds: the watchdog
+       then fires 5 s after every acquire-thread restart. */
+    (void)esp_task_wdt_delete(NULL);
+}

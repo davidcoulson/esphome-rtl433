@@ -1974,6 +1974,9 @@ int main(int argc, char **argv) {
         rtl433_port_wdt_feed();
 #endif
     }
+#ifdef ESP_PLATFORM
+    rtl433_port_wdt_unsubscribe();
+#endif
     if (cfg->verbosity >= LOG_INFO) {
         print_log(LOG_INFO, "rtl_433", "stopping...");
     }

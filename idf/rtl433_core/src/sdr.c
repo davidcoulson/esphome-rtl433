@@ -1401,6 +1401,7 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
         if (n_read > 0)
             cb(&ev, ctx);
     } while (dev->running);
+    rtl433_port_wdt_unsubscribe();
 
     return 0;
 }
