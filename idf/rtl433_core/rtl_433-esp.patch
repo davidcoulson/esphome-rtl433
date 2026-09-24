@@ -359,10 +359,20 @@ index cafd63c..75ecfb4 100644
      return buf;
  }
 diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
-index c8bb91d..2ee2949 100644
+index c8bb91d..56b7b45 100644
 --- a/idf/rtl433_core/src/rtl_433.c
 +++ b/idf/rtl433_core/src/rtl_433.c
-@@ -381,11 +381,20 @@ static void help_write(void)
+@@ -29,6 +29,9 @@
+ #include <signal.h>
+ 
+ #include "rtl_433.h"
++#ifdef ESP_PLATFORM
++#include "rtl433_port.h"
++#endif
+ #include "r_private.h"
+ #include "r_device.h"
+ #include "r_api.h"
+@@ -381,11 +384,20 @@ static void help_write(void)
      exit(0);
  }
  
@@ -384,7 +394,7 @@ index c8bb91d..2ee2949 100644
      while ((opt = getopt(argc, argv, optstring)) != -1) {
          if (opt == test || optopt == test) {
              return opt;
-@@ -480,7 +489,7 @@ static void parse_conf_args(r_cfg_t *cfg, int argc, char *argv[])
+@@ -480,7 +492,7 @@ static void parse_conf_args(r_cfg_t *cfg, int argc, char *argv[])
  {
      int opt;
  
@@ -393,7 +403,7 @@ index c8bb91d..2ee2949 100644
      while ((opt = getopt(argc, argv, OPTSTRING)) != -1) {
          if (opt == '?') {
              opt = optopt; // allow missing arguments
-@@ -594,6 +603,10 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
+@@ -594,6 +606,10 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
          break;
      case 's':
          cfg->samp_rate = atouint32_metric(arg, "-s: ");
@@ -404,7 +414,7 @@ index c8bb91d..2ee2949 100644
          break;
      case 'b':
          cfg->out_block_size = atouint32_metric(arg, "-b: ");
-@@ -1180,7 +1193,19 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+@@ -1180,7 +1196,19 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
          cfg->hop_now = 0;
          time(&cfg->hop_start_time);
          cfg->frequency_index = (cfg->frequency_index + 1) % cfg->frequencies;
@@ -424,7 +434,7 @@ index c8bb91d..2ee2949 100644
      }
  }
  
-@@ -1307,6 +1332,11 @@ static int start_sdr(r_cfg_t *cfg)
+@@ -1307,6 +1335,11 @@ static int start_sdr(r_cfg_t *cfg)
      // cfg->demod->sample_signed = sdr_get_sample_signed(cfg->dev);
  
      /* Set the sample rate */
@@ -436,7 +446,7 @@ index c8bb91d..2ee2949 100644
      sdr_set_sample_rate(cfg->dev, cfg->samp_rate, 1); // always verbose
  
      if (cfg->verbosity || cfg->demod->level_limit < 0.0) {
-@@ -1413,8 +1443,12 @@ static void timer_handler(struct mg_connection *nc, int ev, void *ev_data)
+@@ -1413,8 +1446,12 @@ static void timer_handler(struct mg_connection *nc, int ev, void *ev_data)
              }
          }
          if (cfg->dev_state != DEVICE_STATE_STOPPED) {
@@ -451,7 +461,7 @@ index c8bb91d..2ee2949 100644
              sdr_stop(cfg->dev);
              cfg->dev_state = DEVICE_STATE_STOPPED;
          }
-@@ -1518,6 +1552,9 @@ int main(int argc, char **argv) {
+@@ -1518,6 +1555,9 @@ int main(int argc, char **argv) {
      if (!cfg->no_default_devices) {
          register_all_protocols(cfg, 0); // register all defaults
      }
@@ -461,7 +471,7 @@ index c8bb91d..2ee2949 100644
  
      // check if we need FM demod
      for (void **iter = demod->r_devs.elems; iter && *iter; ++iter) {
-@@ -1900,6 +1937,14 @@ int main(int argc, char **argv) {
+@@ -1900,6 +1940,14 @@ int main(int argc, char **argv) {
      if (cfg->dev_mode != DEVICE_MODE_MANUAL) {
          r = start_sdr(cfg);
          if (r < 0) {
@@ -476,16 +486,32 @@ index c8bb91d..2ee2949 100644
              exit(2);
          }
      }
+@@ -1917,8 +1965,14 @@ int main(int argc, char **argv) {
+     // Send us MG_EV_TIMER event after 2.5 seconds
+     mg_set_timer(nc, mg_time() + 2.5);
+ 
++#ifdef ESP_PLATFORM
++    rtl433_port_wdt_subscribe();
++#endif
+     while (!cfg->exit_async) {
+         mg_mgr_poll(cfg->mgr, 500);
++#ifdef ESP_PLATFORM
++        rtl433_port_wdt_feed();
++#endif
+     }
+     if (cfg->verbosity >= LOG_INFO) {
+         print_log(LOG_INFO, "rtl_433", "stopping...");
 diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
-index 2436821..4d00fcd 100644
+index 2436821..6df51bb 100644
 --- a/idf/rtl433_core/src/sdr.c
 +++ b/idf/rtl433_core/src/sdr.c
-@@ -23,6 +23,12 @@
+@@ -23,6 +23,13 @@
  #include "logger.h"
  #include "fatal.h"
  #include "compat_pthread.h"
 +#ifdef ESP_RTL_SDR
 +#include "esp_rtl_sdr.h"
++#include "rtl433_port.h"
 +#include "freertos/FreeRTOS.h"
 +#include "freertos/task.h"
 +#include "rtl433_core.h"
@@ -493,7 +519,7 @@ index 2436821..4d00fcd 100644
  #ifdef RTLSDR
  #include <rtl-sdr.h>
  #if defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
-@@ -94,6 +100,18 @@ struct sdr_dev {
+@@ -94,6 +101,18 @@ struct sdr_dev {
      void *rtlsdr_cb_ctx;
  #endif
  
@@ -512,7 +538,7 @@ index 2436821..4d00fcd 100644
      char *dev_info;
  
      int running;
-@@ -1117,6 +1135,275 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
+@@ -1117,6 +1136,277 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
  
  #endif
  
@@ -725,7 +751,9 @@ index 2436821..4d00fcd 100644
 +        return -1;
 +
 +    dev->running = 1;
++    rtl433_port_wdt_subscribe(); // this thread feeds the task watchdog itself (see rtl433_port.h)
 +    do {
++        rtl433_port_wdt_feed();
 +        if (dev->buffer_pos + buf_len > buffer_size)
 +            dev->buffer_pos = 0;
 +        uint8_t *buffer = &dev->buffer[dev->buffer_pos];
@@ -788,7 +816,7 @@ index 2436821..4d00fcd 100644
  /* Public API */
  
  int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
-@@ -1124,6 +1411,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
+@@ -1124,6 +1414,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
      if (dev_query && !strncmp(dev_query, "rtl_tcp", 7))
          return rtltcp_open(out_dev, dev_query, verbose);
  
@@ -800,7 +828,7 @@ index 2436821..4d00fcd 100644
  #if !defined(RTLSDR) && !defined(SOAPYSDR)
      if (verbose)
          print_log(LOG_ERROR, __func__, "No input drivers (RTL-SDR or SoapySDR) compiled in.");
-@@ -1163,6 +1455,19 @@ int sdr_close(sdr_dev_t *dev)
+@@ -1163,6 +1458,19 @@ int sdr_close(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          ret = rtltcp_close(dev->rtl_tcp);
  
@@ -820,7 +848,7 @@ index 2436821..4d00fcd 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          ret = SoapySDRDevice_unmake(dev->soapy_dev);
-@@ -1213,10 +1518,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1213,10 +1521,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -840,7 +868,7 @@ index 2436821..4d00fcd 100644
  #endif
  
      int r = -1;
-@@ -1226,6 +1540,21 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1226,6 +1543,21 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ, freq);
      }
  
@@ -862,7 +890,7 @@ index 2436821..4d00fcd 100644
  #ifdef SOAPYSDR
      SoapySDRKwargs args = {0};
      if (dev->soapy_dev) {
-@@ -1266,6 +1595,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
+@@ -1266,6 +1598,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_freq;
  
@@ -877,7 +905,7 @@ index 2436821..4d00fcd 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getFrequency(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1285,10 +1622,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+@@ -1285,10 +1625,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -897,7 +925,7 @@ index 2436821..4d00fcd 100644
  #endif
  
      int r = -1;
-@@ -1296,6 +1642,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+@@ -1296,6 +1645,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ_CORRECTION, ppm);
  
@@ -911,7 +939,7 @@ index 2436821..4d00fcd 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setFrequencyComponent(dev->soapy_dev, SOAPY_SDR_RX, 0, "CORR", (double)ppm, NULL);
-@@ -1324,10 +1677,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+@@ -1324,10 +1680,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -931,7 +959,7 @@ index 2436821..4d00fcd 100644
  #endif
  
      int r = -1;
-@@ -1335,6 +1697,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+@@ -1335,6 +1700,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_GAIN_MODE, 0);
  
@@ -947,7 +975,7 @@ index 2436821..4d00fcd 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = soapysdr_auto_gain(dev->soapy_dev, verbose);
-@@ -1360,10 +1731,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+@@ -1360,10 +1734,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -967,7 +995,7 @@ index 2436821..4d00fcd 100644
  #endif
  
      int r = -1;
-@@ -1390,6 +1770,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+@@ -1390,6 +1773,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
                  || rtltcp_command(dev, RTLTCP_SET_GAIN, gain);
      }
  
@@ -985,7 +1013,7 @@ index 2436821..4d00fcd 100644
  #ifdef RTLSDR
      /* Enable manual gain */
      r = rtlsdr_set_tuner_gain_mode(dev->rtlsdr_dev, 1);
-@@ -1466,10 +1857,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1466,10 +1860,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1005,7 +1033,7 @@ index 2436821..4d00fcd 100644
  #endif
  
      int r = -1;
-@@ -1479,6 +1879,27 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1479,6 +1882,27 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_SAMPLE_RATE, rate);
      }
  
@@ -1033,7 +1061,7 @@ index 2436821..4d00fcd 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0, (double)rate);
-@@ -1515,6 +1936,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
+@@ -1515,6 +1939,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_rate;
  
@@ -1045,7 +1073,7 @@ index 2436821..4d00fcd 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1539,6 +1965,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
+@@ -1539,6 +1968,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
      if (!sdr_settings || !*sdr_settings)
          return 0;
  
@@ -1076,7 +1104,7 @@ index 2436821..4d00fcd 100644
      if (dev->rtl_tcp) {
          while (sdr_settings && *sdr_settings) {
              char const *val = NULL;
-@@ -1712,6 +2162,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
+@@ -1712,6 +2165,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
      if (dev->rtl_tcp)
          return rtltcp_read_loop(dev, cb, ctx, buf_num, buf_len);
  
@@ -1088,7 +1116,7 @@ index 2436821..4d00fcd 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return soapysdr_read_loop(dev, cb, ctx, buf_num, buf_len);
-@@ -1735,6 +2190,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
+@@ -1735,6 +2193,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
          return 0;
      }
  
@@ -1102,7 +1130,7 @@ index 2436821..4d00fcd 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev) {
          dev->running = 0;
-@@ -1773,6 +2235,9 @@ void sdr_redirect_logging(void)
+@@ -1773,6 +2238,9 @@ void sdr_redirect_logging(void)
  static THREAD_RETURN THREAD_CALL acquire_thread(void *arg)
  {
      sdr_dev_t *dev = arg;
@@ -1112,7 +1140,7 @@ index 2436821..4d00fcd 100644
      print_log(LOG_DEBUG, __func__, "acquire_thread enter...");
  
      int r = sdr_start_sync(dev, dev->async_cb, dev->async_ctx, dev->buf_num, dev->buf_len);
-@@ -1824,10 +2289,19 @@ int sdr_stop(sdr_dev_t *dev)
+@@ -1824,10 +2292,19 @@ int sdr_stop(sdr_dev_t *dev)
      if (!dev)
          return -1;
  

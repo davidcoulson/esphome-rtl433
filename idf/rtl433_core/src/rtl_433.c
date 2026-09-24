@@ -29,6 +29,9 @@
 #include <signal.h>
 
 #include "rtl_433.h"
+#ifdef ESP_PLATFORM
+#include "rtl433_port.h"
+#endif
 #include "r_private.h"
 #include "r_device.h"
 #include "r_api.h"
@@ -1962,8 +1965,14 @@ int main(int argc, char **argv) {
     // Send us MG_EV_TIMER event after 2.5 seconds
     mg_set_timer(nc, mg_time() + 2.5);
 
+#ifdef ESP_PLATFORM
+    rtl433_port_wdt_subscribe();
+#endif
     while (!cfg->exit_async) {
         mg_mgr_poll(cfg->mgr, 500);
+#ifdef ESP_PLATFORM
+        rtl433_port_wdt_feed();
+#endif
     }
     if (cfg->verbosity >= LOG_INFO) {
         print_log(LOG_INFO, "rtl_433", "stopping...");

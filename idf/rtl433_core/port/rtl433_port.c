@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 
 #include "rtl433_port.h"
 
@@ -121,4 +122,25 @@ int execvp(const char *file, char *const argv[]) {
   (void) argv;
   errno = ENOSYS;
   return -1;
+}
+
+void rtl433_port_wdt_subscribe(void)
+{
+    TaskHandle_t idle = xTaskGetIdleTaskHandleForCore(xPortGetCoreID());
+    esp_err_t e = esp_task_wdt_delete(idle);
+    if (e != ESP_OK && e != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW("rtl_433", "task WDT: could not unwatch idle%d: %s", xPortGetCoreID(), esp_err_to_name(e));
+        return; // no TWDT (not initialised): nothing to subscribe to either
+    }
+    e = esp_task_wdt_add(NULL);
+    if (e == ESP_OK) {
+        ESP_LOGI("rtl_433", "task WDT watches the decoding task instead of idle%d", xPortGetCoreID());
+    } else if (e != ESP_ERR_INVALID_ARG) { // already subscribed (rtl_433 restarted): fine
+        ESP_LOGW("rtl_433", "task WDT subscribe: %s", esp_err_to_name(e));
+    }
+}
+
+void rtl433_port_wdt_feed(void)
+{
+    (void)esp_task_wdt_reset(); // ESP_ERR_NOT_FOUND when not subscribed: harmless
 }

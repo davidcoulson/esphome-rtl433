@@ -9,7 +9,7 @@ idf_component_register(
     SRCS ${R433_SRCS}
     INCLUDE_DIRS "include" "port"
     PRIV_INCLUDE_DIRS "src"
-    REQUIRES esp_rtl_sdr pthread lwip esp_timer freertos log vfs
+    REQUIRES esp_rtl_sdr pthread lwip esp_timer freertos log vfs esp_system
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE

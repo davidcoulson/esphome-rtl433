@@ -33,6 +33,12 @@ int rtl433_port_on_main_task(void);
 void rtl433_port_note_acquire_task(void);
 int rtl433_port_on_acquire_task(void);
 
+/* Task watchdog: the decoding task subscribes itself (and takes its core's idle task off the
+   watch, since a saturated decoder starves idle without being hung) and feeds the watchdog from
+   rtl_433's main loop, which returns at least every 500 ms even with no samples. */
+void rtl433_port_wdt_subscribe(void);
+void rtl433_port_wdt_feed(void);
+
 // Counts decoded events (src/r_api.c)
 void rtl433_port_count_event(void);
 
