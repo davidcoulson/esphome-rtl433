@@ -23,6 +23,7 @@ uint8_t rtl433_port_usb_task_priority = 0;
 uint8_t rtl433_port_usb_task_core = 0xFF;
 
 volatile uint32_t rtl433_port_events = 0;
+volatile int rtl433_port_http_read_only = 0;
 
 static TaskHandle_t main_task = NULL;
 void rtl433_port_set_main_task(void) { main_task = xTaskGetCurrentTaskHandle(); }
@@ -32,6 +33,7 @@ void rtl433_port_count_event(void) { rtl433_port_events++; }
 static TaskHandle_t acquire_task = NULL;
 void rtl433_port_note_acquire_task(void) { acquire_task = xTaskGetCurrentTaskHandle(); }
 int rtl433_port_on_acquire_task(void) { return acquire_task != NULL && xTaskGetCurrentTaskHandle() == acquire_task; }
+void *rtl433_port_acquire_task_handle(void) { return acquire_task; }
 
 static rtl433_port_log_sink_t log_sink = NULL;
 

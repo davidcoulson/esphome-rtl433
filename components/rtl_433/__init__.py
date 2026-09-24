@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import esphome.codegen as cg
@@ -30,13 +31,15 @@ CONF_GAIN = "gain"
 CONF_PPM_ERROR = "ppm_error"
 CONF_EXTRA_ARGS = "extra_args"
 
-# Pinned to a fork of esp_rtl_sdr v0.8.0-rc3 until upstream picks up the R820T2 band-select fix:
-# upstream's R820T2 (Blog V3 / Nooelec SMArt v5) path never programs the tuner's RF mux / tracking
-# filter for the tuned band, so those dongles stream but never see any RF. The fork adds that, plus
-# CAP_GAIN and the measured 3.57 MHz IF for the Nooelec profile. See
-# https://github.com/hardcoreerik/esp-rtl-sdr/issues/25 (and #24 for why 433 MHz uses 1024k, not 250k).
+# Pinned to a fork of esp_rtl_sdr v0.8.0-rc3 until upstream picks these up. Upstream's R820T2 path
+# (Blog V3 / Nooelec SMArt v5) never programs the tuner's RF mux / tracking filter for the tuned band,
+# so those dongles stream but never see any RF (hardcoreerik/esp-rtl-sdr#25); LOW-range rates
+# (225k-300k) fail BAD_RATE (#24). The fork fixes both and adds: manual + auto gain and the measured
+# 3.57 MHz IF on the Nooelec, in-place sample-rate change on a hop, a fast sync-read copy, control
+# transfer bounds checks, a USB device layout check, and backports of upstream's bulk-pool leak,
+# halted-endpoint recovery, repeater-before-retune and fault-guard fixes.
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "cb9eb0491e17b243a58760a3bec93f6f0c12831d"  # branch nooelec-gain-cap-test
+ESP_RTL_SDR_REF = "ed59c07da0c11c6a8356593b74205cfae58824aa"  # branch nooelec-gain-cap-test
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
@@ -73,6 +76,13 @@ CONF_REPORT_NOISE = "report_noise"
 CONF_HOP_ON_EVENT = "hop_on_event"
 CONF_TAGS = "tags"
 CONF_VERBOSITY = "verbosity"
+CONF_REMOTE_CONTROL = "remote_control"
+CONF_TIME_SYNC_TIMEOUT = "time_sync_timeout"
+CONF_LOG_TASK_STATS = "log_task_stats"
+CONF_DECODE_STACK_FREE = "decode_stack_free"
+CONF_ACQUIRE_STACK_FREE = "acquire_stack_free"
+CONF_HEAP_FREE = "heap_free"
+CONF_PSRAM_FREE = "psram_free"
 CONF_EFFECTIVE_SAMPLE_RATE = "effective_sample_rate"
 CONF_USB_OVERRUNS = "usb_overruns"
 CONF_DROPPED_SAMPLES = "dropped_samples"
@@ -135,19 +145,14 @@ def _decoder(value):
 
 
 def _sample_rate(value):
-    # esp_rtl_sdr streams 225k-300k or 900k-3.2M S/s; accepts 250000, "250k", "1024k".
-    # The low range is rejected for now: the driver mis-quantizes every rate in it and the stream
-    # never starts (hardcoreerik/esp-rtl-sdr#24). 1024k works fine for 433 MHz OOK sensors.
+    # The RTL2832U resampler covers 225k-300k and 900k-3.2M S/s (librtlsdr's limits: exactly 900000
+    # aliases to 300k). Accepts 250000, "250k", "1024k". The low range needs the pinned esp_rtl_sdr
+    # fork (upstream rc3 rejects it, hardcoreerik/esp-rtl-sdr#24).
     if isinstance(value, str) and value.lower().endswith("k"):
         value = float(value[:-1]) * 1000
     value = cv.int_(value)
-    if 225001 <= value <= 300000:
-        raise cv.Invalid(
-            "sample rates of 225k-300k do not work with the current esp_rtl_sdr "
-            "(hardcoreerik/esp-rtl-sdr#24); use 900k-3.2M, e.g. 1024k for 433 MHz"
-        )
-    if not 900000 <= value <= 3200000:
-        raise cv.Invalid("sample_rate must be 900k-3.2M S/s")
+    if not (225001 <= value <= 300000 or 900001 <= value <= 3200000):
+        raise cv.Invalid("sample_rate must be 225k-300k or 900k-3.2M S/s (not exactly 900k)")
     return value
 
 
@@ -182,7 +187,7 @@ CONFIG_SCHEMA = cv.All(
                 cv.ensure_list(_frequency_entry), cv.Length(min=1, max=32)
             ),
             cv.Optional(CONF_HOP_INTERVAL, default="600s"): cv.positive_time_period_seconds,
-            cv.Optional(CONF_SAMPLE_RATE, default=1024000): _sample_rate,
+            cv.Optional(CONF_SAMPLE_RATE, default=250000): _sample_rate,
             # Tuner gain in dB; omitted = automatic
             cv.Optional(CONF_GAIN): cv.float_range(min=0, max=50),
             cv.Optional(CONF_PPM_ERROR, default=0): cv.int_range(min=-200, max=200),
@@ -219,7 +224,43 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_TASK_PRIORITY, default=5): cv.int_range(min=1, max=22),
             cv.Optional(CONF_ACQUIRE_PRIORITY, default=6): cv.int_range(min=1, max=22),
             cv.Optional(CONF_USB_TASK_PRIORITY, default=0): cv.int_range(min=0, max=22),
+            # false: rtl_433's HTTP API answers queries only, so nobody on the network can retune or
+            # reconfigure the receiver through /cmd (Home Assistant's SDR controls stop working too)
+            cv.Optional(CONF_REMOTE_CONTROL, default=True): cv.boolean,
+            # Hold rtl_433 back until the clock is set, so the first events don't carry 1970 timestamps;
+            # start anyway after this long (0 = don't wait)
+            cv.Optional(CONF_TIME_SYNC_TIMEOUT, default="120s"): cv.positive_time_period_milliseconds,
+            # Log every task's share of each core at each update (debug level): where the CPU goes
+            cv.Optional(CONF_LOG_TASK_STATS, default=False): cv.boolean,
             # Diagnostics
+            cv.Optional(CONF_DECODE_STACK_FREE): sensor.sensor_schema(
+                unit_of_measurement="B",
+                icon="mdi:layers-outline",
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_MEASUREMENT,
+                **_DIAG,
+            ),
+            cv.Optional(CONF_ACQUIRE_STACK_FREE): sensor.sensor_schema(
+                unit_of_measurement="B",
+                icon="mdi:layers-outline",
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_MEASUREMENT,
+                **_DIAG,
+            ),
+            cv.Optional(CONF_HEAP_FREE): sensor.sensor_schema(
+                unit_of_measurement="B",
+                icon="mdi:memory",
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_MEASUREMENT,
+                **_DIAG,
+            ),
+            cv.Optional(CONF_PSRAM_FREE): sensor.sensor_schema(
+                unit_of_measurement="B",
+                icon="mdi:memory",
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_MEASUREMENT,
+                **_DIAG,
+            ),
             cv.Optional(CONF_EFFECTIVE_SAMPLE_RATE): sensor.sensor_schema(
                 unit_of_measurement="S/s",
                 icon="mdi:sine-wave",
@@ -360,6 +401,8 @@ async def to_code(config):
     cg.add(var.set_usb_task_priority(config[CONF_USB_TASK_PRIORITY]))
     if CONF_USB_BUFFER in config:
         cg.add(var.set_usb_buffer(config[CONF_USB_BUFFER]))
+    cg.add(var.set_remote_control(config[CONF_REMOTE_CONTROL]))
+    cg.add(var.set_time_sync_timeout(config[CONF_TIME_SYNC_TIMEOUT].total_milliseconds))
     for key, setter in (
         (CONF_EFFECTIVE_SAMPLE_RATE, "set_effective_sample_rate_sensor"),
         (CONF_USB_OVERRUNS, "set_usb_overruns_sensor"),
@@ -367,14 +410,21 @@ async def to_code(config):
         (CONF_DECODED_EVENTS, "set_decoded_events_sensor"),
         (CONF_CPU_LOAD_CORE0, "set_cpu_load_core0_sensor"),
         (CONF_CPU_LOAD_CORE1, "set_cpu_load_core1_sensor"),
+        (CONF_DECODE_STACK_FREE, "set_decode_stack_free_sensor"),
+        (CONF_ACQUIRE_STACK_FREE, "set_acquire_stack_free_sensor"),
+        (CONF_HEAP_FREE, "set_heap_free_sensor"),
+        (CONF_PSRAM_FREE, "set_psram_free_sensor"),
     ):
         if conf := config.get(key):
             sens = await sensor.new_sensor(conf)
             cg.add(getattr(var, setter)(sens))
-    if CONF_CPU_LOAD_CORE0 in config or CONF_CPU_LOAD_CORE1 in config:
+    if CONF_CPU_LOAD_CORE0 in config or CONF_CPU_LOAD_CORE1 in config or config[CONF_LOG_TASK_STATS]:
         # Per-task run-time counters: CPU load is 100% minus each core's idle task share
         add_idf_sdkconfig_option("CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS", True)
         cg.add_define("USE_RTL433_CPU_LOAD")
+    if config[CONF_LOG_TASK_STATS]:
+        add_idf_sdkconfig_option("CONFIG_FREERTOS_USE_TRACE_FACILITY", True)
+        cg.add_define("USE_RTL433_TASK_STATS")
     # Decoder sets go straight to the port layer rather than as -R, so they can change on each hop
     default = config.get(CONF_DECODERS)
     for index, entry in enumerate(config[CONF_FREQUENCIES]):
@@ -384,7 +434,12 @@ async def to_code(config):
 
     if idf_version() >= cv.Version(6, 0, 0):
         add_idf_component(name="espressif/usb", ref=USB_REF)
-    add_idf_component(name="esp_rtl_sdr", repo=ESP_RTL_SDR_REPO, ref=ESP_RTL_SDR_REF)
+    # Developing the driver alongside: ESP_RTL_SDR_LOCAL_PATH=/path/to/esp_rtl_sdr (the directory must be
+    # named esp_rtl_sdr, ESP-IDF names components after their directory) builds that checkout instead
+    if local := os.environ.get("ESP_RTL_SDR_LOCAL_PATH"):
+        add_idf_component(name="esp_rtl_sdr", path=local)
+    else:
+        add_idf_component(name="esp_rtl_sdr", repo=ESP_RTL_SDR_REPO, ref=ESP_RTL_SDR_REF)
     add_idf_component(name="rtl433_core", path=str(RTL433_CORE))
     esp32.include_builtin_idf_component("pthread")
     # Its sample buffers (15 x 256 KB) come from plain malloc(), so malloc must reach PSRAM

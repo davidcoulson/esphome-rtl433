@@ -525,11 +525,21 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
     return 0;
 }
 
+#ifdef ESP_RTL_SDR
+extern volatile int rtl433_port_http_read_only;
+#endif
+
 static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
 {
     if (!rpc || !rpc->method || !*rpc->method) {
         rpc->response(rpc, -1, "Method invalid", 0);
     }
+#ifdef ESP_RTL_SDR
+    // remote_control: false in the ESPHome config: queries only, nobody on the network can retune
+    else if (rtl433_port_http_read_only && strncmp(rpc->method, "get_", 4) != 0) {
+        rpc->response(rpc, -1, "Read-only: remote control is disabled on this receiver", 0);
+    }
+#endif
     // Getter
     else if (!strcmp(rpc->method, "get_dev_query")) {
         rpc->response(rpc, 0, cfg->dev_query, 0);

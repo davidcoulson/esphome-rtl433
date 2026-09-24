@@ -18,6 +18,8 @@ extern size_t rtl433_port_usb_ring_bytes;
 extern uint8_t rtl433_port_usb_task_priority;
 extern uint8_t rtl433_port_usb_task_core;
 extern volatile uint32_t rtl433_port_events;
+extern volatile int rtl433_port_http_read_only;  // refuse every /cmd method except get_*
+void *rtl433_port_acquire_task_handle(void);     // FreeRTOS handle of the USB acquire thread, or NULL
 
 // Snapshot of the USB stream counters; false while no dongle is open
 struct rtl433_usb_stats {

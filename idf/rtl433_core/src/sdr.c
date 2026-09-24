@@ -1228,9 +1228,15 @@ static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
         config.event_cb = esp_sdr_event_cb;
         config.event_ctx = NULL; // set per open below: the dev comes and goes, the handle doesn't
         config.delivery_mode = ESP_RTL_SDR_DELIVERY_READ; // rtl_433 pulls, like a socket
-        if (esp_rtl_sdr_usb_safe_mode_active())
-            print_log(LOG_ERROR, __func__, "USB host is in safe mode after repeated faults; power-cycle to clear");
         esp_err_t err = esp_rtl_sdr_install(&config, &esp_handle);
+        if (err == ESP_RTL_SDR_ERR_USB_SAFE_MODE) {
+            // The driver's crash guard: the USB stack panicked during enumeration on several boots in a
+            // row, so it stays off for this boot rather than boot-looping. Only a real latch reaches here.
+            print_log(LOG_ERROR, __func__, "USB host disabled for this boot after repeated USB crashes; power-cycle to retry");
+            esp_handle = NULL;
+            free(dev);
+            return -1;
+        }
         if (err != ESP_OK) {
             print_logf(LOG_ERROR, __func__, "esp_rtl_sdr_install failed: %s", esp_rtl_sdr_err_to_name(err));
             esp_handle = NULL;
@@ -1880,10 +1886,11 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
             r = -1;
         }
         else if (dev->esp_streaming && rate != dev->esp_rate) {
-            // The driver can't change rate mid-stream. rtl_433 sets the rate and then the frequency on a
-            // hop, so defer: sdr_set_center_freq() restarts the stream once with both
+            // A hop to a band with a different rate: the driver rewrites the resampler between bulk
+            // transfers. If it can't (older driver), fall back to one stop/start in sdr_set_center_freq()
             dev->esp_rate = rate;
-            dev->esp_rate_pending = 1;
+            if (esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) != ESP_OK)
+                dev->esp_rate_pending = 1;
             r = 0;
         }
         else {

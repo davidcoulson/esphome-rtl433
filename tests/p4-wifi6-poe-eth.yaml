@@ -56,6 +56,13 @@ rtl_433:
   task_priority: 5
   acquire_priority: 6
   usb_task_priority: 0
+  remote_control: false
+  time_sync_timeout: 90s
+  log_task_stats: true
+  decode_stack_free: {name: Decode Stack Free}
+  acquire_stack_free: {name: Acquire Stack Free}
+  heap_free: {name: Heap Free}
+  psram_free: {name: PSRAM Free}
   effective_sample_rate: {name: Effective Sample Rate}
   usb_overruns: {name: USB Overruns}
   dropped_samples: {name: Dropped Samples}

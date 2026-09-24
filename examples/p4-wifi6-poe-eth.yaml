@@ -1,7 +1,7 @@
 # rtl_433 on an ESP32-P4 with an RTL-SDR on the USB host port, serving the Home Assistant
 # rtl_433 integration over rtl_433's own HTTP/WebSocket API.
 #
-# This is the configuration running in the author's house (2026-09-23): a Waveshare-design
+# This is the configuration running in the author's house (2026-09-24): a Waveshare-design
 # ESP32-P4-WIFI6-POE-ETH (built-in Ethernet, PoE, USB-A high-speed host port) with a Nooelec
 # NESDR SMArt v5, hopping between 433.92 MHz (Acurite fridge/freezer sensors) and 915 MHz
 # (SCMplus utility meters). One dongle replaces the two-dongle Linux box it used to run on.
@@ -34,12 +34,15 @@ logger:
   hardware_uart: UART0
 
 api:
+  encryption:
+    key: !secret rtl433_api_key   # `esphome` can generate one; keeps the API off the plain LAN
   # Ethernet node: no Wi-Fi reboot timeout, so this is the only automatic recovery from
   # "link up but unreachable".
   reboot_timeout: 300s
 
 ota:
   - platform: esphome
+    password: !secret rtl433_ota_password
 
 # Required: every event carries a wall-clock timestamp that the HA integration checks
 # against its own clock.
@@ -63,20 +66,31 @@ external_components:
 
 rtl_433:
   # More than one frequency: rtl_433 hops between them. Each band runs only its own decoders.
-  # A sample-rate change on a hop restarts the USB stream (about a second), so keep hops slow.
+  # A hop that changes sample rate is applied in place (~0.25 s), so each band can use its own.
+  # 915 MHz utility meters hop across 910-920 MHz: the wider 2048k window catches more of them.
   frequencies:
     - frequency: 433.92MHz
-      sample_rate: 1024k          # not 250k: see README, "Known issues"
-      hop_interval: 60s
+      sample_rate: 250k
+      hop_interval: 30s
       decoders: [acurite_txr, acurite_606]
     - frequency: 915MHz
       sample_rate: 2048k
-      hop_interval: 60s
+      hop_interval: 150s
       decoders: [scmplus]
-  # Manual gain in dB. Automatic gain is not implemented for R820T2 dongles (Blog V3, Nooelec) in
-  # the USB driver yet; 40 dB is what worked here for both the nearby sensors and a distant meter.
+  # Manual gain in dB. Leave it out for the tuner's automatic gain (LNA + mixer AGC). 40 dB is what
+  # worked here for both the nearby sensors and a distant meter.
   gain: 40
   units: si
+  # rtl_433's HTTP API has no authentication. With remote_control off it answers queries only, so
+  # nothing on the network can retune the receiver. Home Assistant's integration works either way;
+  # only its optional "manage settings" controls need this on.
+  remote_control: false
+  # Uncomment to cut decoding CPU by roughly two thirds on a quiet 2 MS/s band (measured 89% -> 33%
+  # of a core): rtl_433 skips sample blocks below its running noise estimate. A signal right at the
+  # noise floor can be missed.
+  # detector:
+  #   auto_level: true
+  #   squelch: true
 
   # Diagnostics (all optional). `dropped_samples` climbing means rtl_433 is not keeping up.
   effective_sample_rate:
@@ -91,6 +105,13 @@ rtl_433:
     name: CPU Load Core 0
   cpu_load_core1:
     name: CPU Load Core 1
+  # Headroom: the least free stack each rtl_433 task has had, and free heap / PSRAM
+  decode_stack_free:
+    name: Decode Stack Free
+  heap_free:
+    name: Heap Free
+  psram_free:
+    name: PSRAM Free
 
 sensor:
   - platform: internal_temperature

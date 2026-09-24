@@ -1,6 +1,10 @@
 #include "rtl_433_component.h"
 
 
+#include <cstring>
+#include <ctime>
+
+#include <esp_heap_caps.h>
 #include <esp_pthread.h>
 #include <esp_timer.h>
 
@@ -17,6 +21,9 @@ static constexpr uint32_t TASK_STACK = 65536;
 
 // rtl_433 levels: 1 fatal, 2 critical, 3 error, 4 warning, 5 notice, 6 info, 7 debug, 8 trace
 static void log_sink(int level, char const *src, char const *msg) {
+  // -Y autolevel reports every noise-floor change as a warning; routine, and frequent on a hopping receiver
+  if (level == 4 && src != nullptr && strcmp(src, "Auto Level") == 0)
+    level = 6;
   if (level <= 3) {
     ESP_LOGE(TAG, "%s: %s", src, msg);
   } else if (level == 4) {
@@ -30,11 +37,33 @@ static void log_sink(int level, char const *src, char const *msg) {
 
 void Rtl433Component::setup() {}
 
+bool Rtl433Component::clock_ready_() {
+  // Anything before 2024 is the RTC's power-on epoch, not a synced clock
+  return ::time(nullptr) > 1704067200;
+}
+
 void Rtl433Component::loop() {
   // rtl_433 opens its HTTP server at start-up, which needs lwIP running
   if (this->started_ || !network::is_connected())
     return;
+  // Every event carries a wall-clock timestamp that the Home Assistant integration checks, so wait for
+  // the clock (SNTP / homeassistant time) before starting, but not forever
+  uint32_t now = millis();
+  if (this->network_up_ms_ == 0)
+    this->network_up_ms_ = now;
+  if (!this->clock_ready_() && now - this->network_up_ms_ < this->time_sync_timeout_ms_) {
+    if (!this->waiting_logged_) {
+      ESP_LOGI(TAG, "Waiting up to %us for the clock before starting rtl_433",
+               static_cast<unsigned>(this->time_sync_timeout_ms_ / 1000));
+      this->waiting_logged_ = true;
+    }
+    return;
+  }
+  if (!this->clock_ready_())
+    ESP_LOGW(TAG, "Clock still not set after %us: starting anyway, early events will have wrong timestamps",
+             static_cast<unsigned>(this->time_sync_timeout_ms_ / 1000));
   this->started_ = true;
+  rtl433_port_http_read_only = this->remote_control_ ? 0 : 1;
   // Demodulation and decoding run in rtl_433's main task: keep it off the core the ESPHome loop uses
   BaseType_t loop_core = xPortGetCoreID();
   if (this->task_core_ < 0)
@@ -58,7 +87,8 @@ void Rtl433Component::task_entry(void *arg) {
   // rtl_433's acquire thread (created by this task) mostly waits on USB reads: put it with the USB
   // host stack and the ESPHome loop, leaving the decoding core to the decoders
   esp_pthread_cfg_t pcfg = esp_pthread_get_default_config();
-  pcfg.stack_size = 24576;
+  // Measured peak ~1.6 KB (acquire_stack_free sensor); 8 KB leaves room for its error/log paths
+  pcfg.stack_size = 8192;
   pcfg.pin_to_core = self->acquire_core_;
   pcfg.thread_name = "rtl_433_acq";
   pcfg.prio = self->acquire_priority_;
@@ -102,7 +132,52 @@ void Rtl433Component::update() {
   }
   if (this->decoded_events_sensor_ != nullptr)
     this->decoded_events_sensor_->publish_state(rtl433_port_events & 0xFFFFFF);  // exact in a float
+  this->publish_health_();
+  this->log_task_stats_();
   this->publish_cpu_load_();
+}
+
+void Rtl433Component::publish_health_() {
+  // ESP-IDF's high-water marks are in bytes: the least free stack each task has ever had
+  if (this->decode_stack_free_sensor_ != nullptr && this->task_ != nullptr && !this->stopped_)
+    this->decode_stack_free_sensor_->publish_state(uxTaskGetStackHighWaterMark(this->task_));
+  auto *acq = static_cast<TaskHandle_t>(rtl433_port_acquire_task_handle());
+  if (this->acquire_stack_free_sensor_ != nullptr && acq != nullptr && !this->stopped_)
+    this->acquire_stack_free_sensor_->publish_state(uxTaskGetStackHighWaterMark(acq));
+  if (this->heap_free_sensor_ != nullptr)
+    this->heap_free_sensor_->publish_state(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  if (this->psram_free_sensor_ != nullptr)
+    this->psram_free_sensor_->publish_state(heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+
+void Rtl433Component::log_task_stats_() {
+#if defined(USE_RTL433_TASK_STATS) && configUSE_TRACE_FACILITY && configGENERATE_RUN_TIME_STATS
+  // Share of wall time per task since the previous update, for the tasks that used more than 1%
+  static std::vector<std::pair<TaskHandle_t, uint32_t>> last;
+  static int64_t last_us = 0;
+  UBaseType_t n = uxTaskGetNumberOfTasks();
+  std::vector<TaskStatus_t> st(n + 4);
+  n = uxTaskGetSystemState(st.data(), st.size(), nullptr);
+  int64_t now = esp_timer_get_time();
+  int64_t wall = now - last_us;
+  std::vector<std::pair<TaskHandle_t, uint32_t>> cur;
+  for (UBaseType_t i = 0; i < n; i++) {
+    cur.emplace_back(st[i].xHandle, st[i].ulRunTimeCounter);
+    if (last_us == 0 || wall <= 0)
+      continue;
+    uint32_t prev = 0;
+    for (auto &p : last)
+      if (p.first == st[i].xHandle)
+        prev = p.second;
+    float pct = 100.0f * static_cast<float>(st[i].ulRunTimeCounter - prev) / static_cast<float>(wall);
+    if (pct >= 1.0f)
+      ESP_LOGD(TAG, "task %-16s core %2d prio %2u  %5.1f%% of one core", st[i].pcTaskName,
+               static_cast<int>(xTaskGetCoreID(st[i].xHandle)), static_cast<unsigned>(st[i].uxCurrentPriority),
+               pct);
+  }
+  last = std::move(cur);
+  last_us = now;
+#endif
 }
 
 void Rtl433Component::publish_cpu_load_() {
@@ -125,10 +200,8 @@ void Rtl433Component::publish_cpu_load_() {
 
 void Rtl433Component::dump_config() {
   ESP_LOGCONFIG(TAG, "rtl_433:");
-  std::string line;
-  for (auto &a : this->args_)
-    line += a + " ";
-  ESP_LOGCONFIG(TAG, "  Command line: %s", line.c_str());
+  ESP_LOGCONFIG(TAG, "  Command line: %s", this->command_line_.c_str());
+  ESP_LOGCONFIG(TAG, "  Remote control via /cmd: %s", this->remote_control_ ? "enabled" : "disabled (read-only)");
   ESP_LOGCONFIG(TAG,
                 "  Decoding task: core %d, priority %d\n"
                 "  Acquire thread: core %d, priority %d\n"
@@ -143,6 +216,10 @@ void Rtl433Component::dump_config() {
   LOG_SENSOR("  ", "Decoded Events", this->decoded_events_sensor_);
   LOG_SENSOR("  ", "CPU Load Core 0", this->cpu_load_sensor_[0]);
   LOG_SENSOR("  ", "CPU Load Core 1", this->cpu_load_sensor_[1]);
+  LOG_SENSOR("  ", "Decode Stack Free", this->decode_stack_free_sensor_);
+  LOG_SENSOR("  ", "Acquire Stack Free", this->acquire_stack_free_sensor_);
+  LOG_SENSOR("  ", "Heap Free", this->heap_free_sensor_);
+  LOG_SENSOR("  ", "PSRAM Free", this->psram_free_sensor_);
   for (auto &band : this->band_decoders_)
     ESP_LOGCONFIG(TAG, "  Band %d decoders: %s", band.first, band.second.c_str());
 }

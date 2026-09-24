@@ -381,11 +381,20 @@ static void help_write(void)
     exit(0);
 }
 
+#ifdef ESP_RTL_SDR
+// newlib's getopt only fully re-initialises (its internal scan position too) when optind is 0; with
+// optind = 1 the first call re-reads argv[1][0] ('-') as an option character and prints
+// "invalid option -- `--'". glibc treats 1 as a full reset, which is why upstream uses it.
+#define GETOPT_RESET 0
+#else
+#define GETOPT_RESET 1
+#endif
+
 static int hasopt(int test, int argc, char *argv[], char const *optstring)
 {
     int opt;
 
-    optind = 1; // reset getopt
+    optind = GETOPT_RESET; // reset getopt
     while ((opt = getopt(argc, argv, optstring)) != -1) {
         if (opt == test || optopt == test) {
             return opt;
@@ -480,7 +489,7 @@ static void parse_conf_args(r_cfg_t *cfg, int argc, char *argv[])
 {
     int opt;
 
-    optind = 1; // reset getopt
+    optind = GETOPT_RESET; // reset getopt
     while ((opt = getopt(argc, argv, OPTSTRING)) != -1) {
         if (opt == '?') {
             opt = optopt; // allow missing arguments
