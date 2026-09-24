@@ -1,3 +1,22 @@
+diff --git a/idf/rtl433_core/include/r_private.h b/idf/rtl433_core/include/r_private.h
+index 7a2fd71..70e37db 100644
+--- a/idf/rtl433_core/include/r_private.h
++++ b/idf/rtl433_core/include/r_private.h
+@@ -19,6 +19,14 @@
+ struct dm_state {
+     float auto_level;
+     float squelch_offset;
++    /* ESP port: squelch look-behind (push_sdr_flow keeps the previous block so a packet that
++       straddles a block boundary is not cut in half when one of its blocks averages as noise) */
++    unsigned char *squelch_prev_iq;
++    unsigned squelch_prev_cap;
++    unsigned squelch_prev_len;
++    int squelch_prev_active;
++    int squelch_prev_done;
++    int squelch_force; ///< set while replaying the previous block: process it, skip the bookkeeping
+     float level_limit;
+     float noise_level;
+     float min_level_auto;
 diff --git a/idf/rtl433_core/include/rtl_433.h b/idf/rtl433_core/include/rtl_433.h
 index e01ca64..1922244 100644
 --- a/idf/rtl433_core/include/rtl_433.h
@@ -92,7 +111,7 @@ index dce0404..8413209 100644
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
 diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
-index 2a94dc5..c219151 100644
+index 2a94dc5..dc9963c 100644
 --- a/idf/rtl433_core/src/r_api.c
 +++ b/idf/rtl433_core/src/r_api.c
 @@ -84,6 +84,10 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
@@ -144,7 +163,15 @@ index 2a94dc5..c219151 100644
  
      cfg->demod = calloc(1, sizeof(*cfg->demod));
      if (!cfg->demod)
-@@ -591,6 +597,9 @@ void r_redirect_logging(r_cfg_t *cfg)
+@@ -217,6 +223,7 @@ void r_free_cfg(r_cfg_t *cfg)
+ 
+     list_free_elems(&cfg->in_files, NULL);
+ 
++    free(cfg->demod->squelch_prev_iq);
+     free(cfg->demod);
+     cfg->demod = NULL;
+ 
+@@ -591,6 +598,9 @@ void r_redirect_logging(r_cfg_t *cfg)
  /** Pass the data structure to all output handlers. Frees data afterwards. */
  void event_occurred_handler(r_cfg_t *cfg, data_t *data)
  {
@@ -154,7 +181,7 @@ index 2a94dc5..c219151 100644
      // prepend "time" if requested
      if (cfg->report_time != REPORT_TIME_OFF) {
          char time_str[LOCAL_TIME_BUFLEN];
-@@ -629,9 +638,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
+@@ -629,9 +639,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
  }
  
  /** Pass the data structure to all output handlers. Frees data afterwards. */
@@ -171,6 +198,101 @@ index 2a94dc5..c219151 100644
  
  #ifndef NDEBUG
      // check for undeclared csv fields
+diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
+index 95f0c27..66f2e1c 100644
+--- a/idf/rtl433_core/src/r_flow.c
++++ b/idf/rtl433_core/src/r_flow.c
+@@ -124,6 +124,7 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+ 
+     // Feed data to all raw outputs (e.g. rtl_tcp)
+     // do this here and not in sdr_handler so realtime replay can use rtl_tcp output
++    if (!demod->squelch_force)
+     for (void **iter = demod->raw_handler->elems; iter && *iter; ++iter) {
+         raw_output_t *output = *iter;
+         raw_output_frame(output, iq_buf, len);
+@@ -133,11 +134,11 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+     time_t last_frame_sec = demod->now.tv_sec;
+     get_time_now(&demod->now);
+ 
+-    // age the frame position if there is one
+-    if (demod->frame_start_ago) {
++    // age the frame position if there is one (a replayed block was aged when first seen)
++    if (demod->frame_start_ago && !demod->squelch_force) {
+         demod->frame_start_ago += n_samples;
+     }
+-    if (demod->frame_end_ago) {
++    if (demod->frame_end_ago && !demod->squelch_force) {
+         demod->frame_end_ago += n_samples;
+     }
+ 
+@@ -172,6 +173,48 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+     int noise_only = avg_db < demod->noise_level + 3.0f; // or demod->min_level_auto?
+     // always process frames if loader, dumper, or analyzers are in use, otherwise skip silent frames
+     process_frame = demod->squelch_offset <= 0 || !noise_only || demod->load_info.format || demod->analyze_pulses || demod->dumper.len || demod->samp_grab;
++#ifdef ESP_PLATFORM
++    /* Squelch look-behind (ESP port). A short burst (a utility meter's ~3 ms) straddling a block
++       boundary leaves one block that averages as noise; skipping that block cuts the packet in half.
++       So: a block right after an active one is always processed (the tail), and when a block is
++       active but the previous one was skipped, the previous block is replayed first (the head).
++       Costs one block of latency and a copy; the replay skips the statistics and frame ageing. */
++    if (demod->squelch_offset > 0 && !demod->squelch_force && !demod->load_info.format
++            && !demod->analyze_pulses && !demod->dumper.len && !demod->samp_grab) {
++        if (!noise_only && demod->squelch_prev_len && !demod->squelch_prev_done) {
++            demod->squelch_force = 1;
++            push_sdr_flow(cfg, demod->squelch_prev_iq, demod->squelch_prev_len);
++            demod->squelch_force = 0;
++            // the replay overwrote the envelope buffer: redo this block's
++            if (demod->sample_size == 2) {
++                if (demod->use_mag_est) {
++                    magnitude_est_cu8(iq_buf, demod->buf.temp, n_samples);
++                } else {
++                    envelope_detect(iq_buf, demod->buf.temp, n_samples);
++                }
++            } else {
++                magnitude_est_cs16((int16_t *)iq_buf, demod->buf.temp, n_samples);
++            }
++        }
++        if (noise_only && demod->squelch_prev_active) {
++            process_frame = 1;
++        }
++        if (demod->squelch_prev_cap < len) {
++            free(demod->squelch_prev_iq);
++            demod->squelch_prev_iq  = malloc(len);
++            demod->squelch_prev_cap = demod->squelch_prev_iq ? len : 0;
++        }
++        if (demod->squelch_prev_iq) {
++            memcpy(demod->squelch_prev_iq, iq_buf, len);
++            demod->squelch_prev_len    = len;
++            demod->squelch_prev_active = !noise_only;
++            demod->squelch_prev_done   = process_frame;
++        }
++    } else if (demod->squelch_force) {
++        process_frame = 1;
++    }
++    if (!demod->squelch_force) {
++#endif
+     demod->total_frames_count += 1;
+     if (noise_only) {
+         demod->total_frames_squelch += 1;
+@@ -187,6 +230,9 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+     } else {
+         demod->noise_level = (demod->noise_level * 31 + avg_db) / 32; // slow rise over 32 frames
+     }
++#ifdef ESP_PLATFORM
++    } // !squelch_force
++#endif
+     // Report noise every report_noise seconds, but only for the first frame that second
+     if (demod->report_noise && last_frame_sec != demod->now.tv_sec && demod->now.tv_sec % demod->report_noise == 0) {
+         print_logf(LOG_WARNING, "Auto Level", "Current %s level %.1f dB, estimated noise %.1f dB",
+@@ -488,7 +534,7 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+         }
+     }
+ 
+-    demod->input_pos += n_samples;
++    if (!demod->squelch_force) demod->input_pos += n_samples; // ESP port: replay keeps the position
+ 
+     return d_events;
+ }
 diff --git a/idf/rtl433_core/src/r_util.c b/idf/rtl433_core/src/r_util.c
 index cafd63c..75ecfb4 100644
 --- a/idf/rtl433_core/src/r_util.c

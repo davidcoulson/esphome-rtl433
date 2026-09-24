@@ -223,6 +223,7 @@ void r_free_cfg(r_cfg_t *cfg)
 
     list_free_elems(&cfg->in_files, NULL);
 
+    free(cfg->demod->squelch_prev_iq);
     free(cfg->demod);
     cfg->demod = NULL;
 

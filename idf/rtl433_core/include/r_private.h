@@ -19,6 +19,14 @@
 struct dm_state {
     float auto_level;
     float squelch_offset;
+    /* ESP port: squelch look-behind (push_sdr_flow keeps the previous block so a packet that
+       straddles a block boundary is not cut in half when one of its blocks averages as noise) */
+    unsigned char *squelch_prev_iq;
+    unsigned squelch_prev_cap;
+    unsigned squelch_prev_len;
+    int squelch_prev_active;
+    int squelch_prev_done;
+    int squelch_force; ///< set while replaying the previous block: process it, skip the bookkeeping
     float level_limit;
     float noise_level;
     float min_level_auto;
