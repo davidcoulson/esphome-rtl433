@@ -25,6 +25,7 @@ Changes to upstream rtl_433 worth knowing about: the demodulator's four internal
 - **Dongle:** an RTL2832U dongle that esp_rtl_sdr supports.
   - Nooelec NESDR SMArt v5 (R820T2): **verified**, with the driver fork: both bands, manual and automatic gain, hot-plug. Side by side with rtl_433 on Linux and the same dongle model it decodes the same 915 MHz utility meters (see [Known issues](#known-issues) for the fixes that took).
   - RTL-SDR Blog V3 (R820T2): **verified** (2026-09-24): detected even with generic Realtek USB strings (the driver promotes an unknown 0bda:2838 dongle whose tuner answers the R820T2 chip-id probe to the V3 profile), both bands, auto gain, hot-plug.
+- **Bands:** 433.92 MHz and 915 MHz are verified with real transmitters. 315, 345 and 868 MHz are untested here (nothing in the house transmits on them) but take the same paths: the tuner's band table has one row for 310-450 MHz and one for 650-1766 MHz, and both are exercised on every hop; the decoders are upstream's and do not depend on the frequency.
   - RTL-SDR Blog V4 (R828D): esp_rtl_sdr's primary, measured profile; not tested by this project yet.
 
 What it costs at runtime, measured on the P4 at 360 MHz with zero dropped samples:
