@@ -455,4 +455,4 @@ async def to_code(config):
     # The task watchdog's default 5 s was tripped once by a burst on the USB/acquire core at the first
     # stream start after boot. 30 s still catches a real hang without rebooting on that burst.
     # (Subscribing rtl_433's own tasks to the watchdog instead was tried and made resets frequent.)
-    add_idf_sdkconfig_option("CONFIG_ESP_TASK_WDT_TIMEOUT_S", 30)
+    add_idf_sdkconfig_option("CONFIG_ESP_TASK_WDT_TIMEOUT_S", 10)
