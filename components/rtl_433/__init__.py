@@ -452,7 +452,8 @@ async def to_code(config):
     add_idf_sdkconfig_option("CONFIG_LWIP_MAX_SOCKETS", 16)
     # esp_rtl_sdr's descriptor and tuner transfers (its P4 reference config uses 1024)
     add_idf_sdkconfig_option("CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE", 1024)
-    # The task watchdog's default 5 s was tripped once by a burst on the USB/acquire core at the first
-    # stream start after boot. 30 s still catches a real hang without rebooting on that burst.
+    # The task watchdog's default 5 s was tripped by the main loop being starved (small USB blocks
+    # plus a log flood, fixed in v0.1.5); 30 s was the stopgap while that was found. 10 s keeps a
+    # margin over ESPHome's own 2.5 s "took a long time" threshold and still catches a real hang.
     # (Subscribing rtl_433's own tasks to the watchdog instead was tried and made resets frequent.)
     add_idf_sdkconfig_option("CONFIG_ESP_TASK_WDT_TIMEOUT_S", 10)
