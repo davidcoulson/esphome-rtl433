@@ -43,7 +43,7 @@ CONF_EXTRA_ARGS = "extra_args"
 # band was nearly deaf). The fork's own fixes are
 # proposed upstream as hardcoreerik/esp-rtl-sdr#26.
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "59deff2a7758f0ada99990b3e62a1beaa787aa85"  # branch nooelec-gain-cap-test
+ESP_RTL_SDR_REF = "2b8ee161a4dfc261e3dbf34ee4619151ae2facad"  # branch nooelec-gain-cap-test
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
