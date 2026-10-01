@@ -40,10 +40,10 @@ CONF_EXTRA_ARGS = "extra_args"
 # halted-endpoint recovery, repeater-before-retune and fault-guard fixes, a fix for a crash when the
 # dongle is unplugged mid-stream, a retry for a failed USB enumeration, working R820T2 auto gain, and
 # the tuner's IF filter / IF following the sample rate as librtlsdr does (without it the 915 MHz ISM
-# band was nearly deaf). The fork's own fixes are
+# band was nearly deaf), and AUTO gain kept across retunes and stream restarts. The fork's own fixes are
 # proposed upstream as hardcoreerik/esp-rtl-sdr#26.
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "2b8ee161a4dfc261e3dbf34ee4619151ae2facad"  # branch nooelec-gain-cap-test
+ESP_RTL_SDR_REF = "ac1d77dc9f2ceb9c1f629188ae786a81b89600c2"  # branch gain-state-fixes
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
