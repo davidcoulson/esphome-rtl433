@@ -123,7 +123,9 @@ void Rtl433Component::update() {
     ESP_LOGE(TAG, "rtl_433 is no longer running (exit code %d); reboot to recover", rtl433_port_exit_code);
   }
   rtl433_usb_stats stats{};
+  bool streaming = false;
   if (!this->stopped_ && rtl433_port_usb_stats(&stats)) {
+    streaming = stats.effective_sps > 0;
     // The driver's counters restart with every stream start (each rate-change hop): accumulate the deltas
     this->overruns_total_ += stats.overruns >= this->last_overruns_ ? stats.overruns - this->last_overruns_ : stats.overruns;
     // consumer_drops is bytes the driver dropped from its ring because rtl_433 read too slowly (plus 1 for each
@@ -141,11 +143,46 @@ void Rtl433Component::update() {
              static_cast<unsigned>(stats.sample_rate), stats.frequency / 1e6, static_cast<unsigned>(stats.overruns),
              static_cast<unsigned>(stats.consumer_drops));
   }
+  if (!this->stopped_)
+    this->check_liveness_(streaming);
   if (this->decoded_events_sensor_ != nullptr)
     this->decoded_events_sensor_->publish_state(rtl433_port_events & 0xFFFFFF);  // exact in a float
   this->publish_health_();
   this->log_task_stats_();
   this->publish_cpu_load_();
+}
+
+void Rtl433Component::check_liveness_(bool streaming) {
+  // rtl_433's main loop passes at least twice a second, and while the USB stream delivers samples the
+  // demodulator takes frames. Either stopping for this long means it is hung, not just busy.
+  static constexpr uint32_t STALL_MS = 30000;
+  uint32_t now = millis();
+  uint32_t loops = rtl433_port_main_loops, frames = rtl433_port_frames;
+  if (loops != this->last_loops_ || loops == 0) {  // 0: the loop has not started (start-up, dongle wait)
+    this->last_loops_ = loops;
+    this->last_loops_ms_ = now;
+  }
+  if (frames != this->last_frames_ || !streaming) {  // no stream (no dongle, restarting): nothing to take
+    this->last_frames_ = frames;
+    this->last_frames_ms_ = now;
+  }
+  bool loop_stalled = now - this->last_loops_ms_ > STALL_MS;
+  bool frames_stalled = now - this->last_frames_ms_ > STALL_MS;
+  if ((loop_stalled || frames_stalled) && !this->stalled_) {
+    this->stalled_ = true;
+    if (loop_stalled) {
+      this->status_set_error(LOG_STR("rtl_433 main loop stalled"));
+      ESP_LOGE(TAG, "rtl_433's main loop has not run for %us", static_cast<unsigned>((now - this->last_loops_ms_) / 1000));
+    } else {
+      this->status_set_error(LOG_STR("rtl_433 takes no samples"));
+      ESP_LOGE(TAG, "The USB stream runs but rtl_433 has taken no samples for %us",
+               static_cast<unsigned>((now - this->last_frames_ms_) / 1000));
+    }
+  } else if (!loop_stalled && !frames_stalled && this->stalled_) {
+    this->stalled_ = false;
+    this->status_clear_error();
+    ESP_LOGI(TAG, "rtl_433 is running again");
+  }
 }
 
 void Rtl433Component::publish_health_() {

@@ -50,6 +50,7 @@ class Rtl433Component : public PollingComponent {
   static void task_entry(void *arg);
   void publish_cpu_load_();
   void publish_health_();
+  void check_liveness_(bool streaming);
   void log_task_stats_();
   bool clock_ready_();
 
@@ -69,6 +70,8 @@ class Rtl433Component : public PollingComponent {
   int usb_task_priority_{0};
   uint32_t usb_buffer_{0};
   bool stopped_{false};
+  bool stalled_{false};
+  uint32_t last_loops_{0}, last_loops_ms_{0}, last_frames_{0}, last_frames_ms_{0};
   uint32_t last_overruns_{0}, last_drops_{0}, overruns_total_{0};
   uint64_t drop_bytes_total_{0};
 

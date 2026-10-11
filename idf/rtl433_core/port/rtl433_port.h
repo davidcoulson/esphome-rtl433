@@ -35,9 +35,6 @@ int rtl433_port_on_main_task(void);
 void rtl433_port_note_acquire_task(void);
 int rtl433_port_on_acquire_task(void);
 
-/* Task watchdog: the decoding task subscribes itself (and takes its core's idle task off the
-   watch, since a saturated decoder starves idle without being hung) and feeds the watchdog from
-   rtl_433's main loop, which returns at least every 500 ms even with no samples. */
 /* The acquire thread's own stack high-water mark (bytes), refreshed by the thread itself about once
    a second. Read this instead of calling uxTaskGetStackHighWaterMark() on its handle: the thread is
    recreated on every input restart (dongle replug) and a stale handle is a load fault. */
@@ -45,11 +42,11 @@ extern volatile unsigned rtl433_port_acquire_stack_free;
 /* The same for the decoding (main) task, refreshed from its main loop by rtl433_port_main_tick(): the
    component never queries the task's handle, which is gone once rtl_433 has exited. */
 extern volatile unsigned rtl433_port_decode_stack_free;
+// Liveness, for the ESPHome component: bumped by every pass of rtl_433's main loop, and its frame count
+extern volatile uint32_t rtl433_port_main_loops;
+extern volatile uint32_t rtl433_port_frames;
 struct r_cfg;
 void rtl433_port_main_tick(struct r_cfg *cfg);
-void rtl433_port_wdt_subscribe(void);
-void rtl433_port_wdt_feed(void);
-void rtl433_port_wdt_unsubscribe(void); /* a subscribed task must call this before it exits */
 
 // Counts decoded events (src/r_api.c)
 void rtl433_port_count_event(void);

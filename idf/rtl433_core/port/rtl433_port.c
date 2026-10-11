@@ -11,9 +11,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "esp_task_wdt.h"
 
 #include "rtl433_port.h"
+#include "rtl_433.h"
+#include "r_private.h"
 
 static const char *const TAG = "rtl_433";
 
@@ -38,9 +39,14 @@ int rtl433_port_on_acquire_task(void) { return acquire_task != NULL && xTaskGetC
 void *rtl433_port_acquire_task_handle(void) { return acquire_task; }
 
 volatile unsigned rtl433_port_decode_stack_free = 0;
+volatile uint32_t rtl433_port_main_loops = 0;
+volatile uint32_t rtl433_port_frames = 0;
 
 // From rtl_433's main loop, at least every 500 ms (mg_mgr_poll's timeout)
 void rtl433_port_main_tick(struct r_cfg *cfg) {
+  rtl433_port_main_loops++;
+  if (cfg->demod != NULL)
+    rtl433_port_frames = cfg->demod->total_frames_count;
   rtl433_port_bands_poll(cfg);
   static TickType_t last_hwm = 0;
   TickType_t now = xTaskGetTickCount();
@@ -144,32 +150,4 @@ int execvp(const char *file, char *const argv[]) {
   (void) argv;
   errno = ENOSYS;
   return -1;
-}
-
-void rtl433_port_wdt_subscribe(void)
-{
-    TaskHandle_t idle = xTaskGetIdleTaskHandleForCore(xPortGetCoreID());
-    esp_err_t e = esp_task_wdt_delete(idle);
-    if (e != ESP_OK && e != ESP_ERR_NOT_FOUND) {
-        ESP_LOGW("rtl_433", "task WDT: could not unwatch idle%d: %s", xPortGetCoreID(), esp_err_to_name(e));
-        return; // no TWDT (not initialised): nothing to subscribe to either
-    }
-    e = esp_task_wdt_add(NULL);
-    if (e == ESP_OK) {
-        ESP_LOGI("rtl_433", "task WDT watches the decoding task instead of idle%d", xPortGetCoreID());
-    } else if (e != ESP_ERR_INVALID_ARG) { // already subscribed (rtl_433 restarted): fine
-        ESP_LOGW("rtl_433", "task WDT subscribe: %s", esp_err_to_name(e));
-    }
-}
-
-void rtl433_port_wdt_feed(void)
-{
-    (void)esp_task_wdt_reset(); // ESP_ERR_NOT_FOUND when not subscribed: harmless
-}
-
-void rtl433_port_wdt_unsubscribe(void)
-{
-    /* A watched task that exits without this leaves a stale entry that never feeds: the watchdog
-       then fires 5 s after every acquire-thread restart. */
-    (void)esp_task_wdt_delete(NULL);
 }
