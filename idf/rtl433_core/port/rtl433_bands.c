@@ -9,6 +9,7 @@
 #include "r_device.h"
 #include "r_private.h"
 #include "rtl_433_devices.h"
+#include "baseband.h"
 #include "logger.h"
 
 #include "rtl433_port.h"
@@ -81,6 +82,22 @@ static int register_list(r_cfg_t *cfg, char const *list) {
   return count;
 }
 
+// FSK decoders need the FM demodulator: without it demod->buf.fm, a union with the AM envelope, holds
+// the envelope and every FSK decode silently fails. main() decides once, from the decoders registered at
+// start-up, which with per-band sets are band 0's only; so decide again whenever the set changes.
+static void update_fm_demod(r_cfg_t *cfg) {
+  struct dm_state *demod = cfg->demod;
+  int need = demod->dumper.len > 0;  // as main(): a dumper may want the FM signal
+  for (void **iter = demod->r_devs.elems; iter && *iter && !need; ++iter) {
+    r_device *r_dev = *iter;
+    if (r_dev->modulation >= FSK_DEMOD_MIN_VAL)
+      need = 1;
+  }
+  if (need && !demod->enable_FM_demod)
+    baseband_demod_FM_reset(&demod->demod_FM_state);  // no state left over from before it was off
+  demod->enable_FM_demod = need;
+}
+
 // A frequency set from Home Assistant (/cmd center_frequency) ends hopping, and it may not be any of the
 // configured bands: run every band's decoders (or the defaults, if some band uses the defaults).
 void rtl433_port_manual_tune(r_cfg_t *cfg) {
@@ -92,12 +109,14 @@ void rtl433_port_manual_tune(r_cfg_t *cfg) {
     if (band_decoders[i] == NULL && i < band_count) {
       unregister_all(cfg);
       register_all_protocols(cfg, 0);
+      update_fm_demod(cfg);
       print_log(LOG_NOTICE, "Decoders", "Manual frequency: rtl_433 default decoders");
       return;
     }
     if (band_decoders[i] != NULL)
       register_list(cfg, band_decoders[i]);
   }
+  update_fm_demod(cfg);
   print_log(LOG_NOTICE, "Decoders", "Manual frequency: every band's decoders");
 }
 
@@ -116,9 +135,11 @@ void rtl433_port_apply_band(r_cfg_t *cfg) {
   char const *list = band < MAX_FREQS ? band_decoders[band] : NULL;
   if (list == NULL) {
     register_all_protocols(cfg, 0);
+    update_fm_demod(cfg);
     print_logf(LOG_NOTICE, "Decoders", "Band %d: rtl_433 default decoders", band);
     return;
   }
   int count = register_list(cfg, list);
+  update_fm_demod(cfg);
   print_logf(LOG_NOTICE, "Decoders", "Band %d: %d decoder(s): %s", band, count, list);
 }

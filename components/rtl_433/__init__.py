@@ -140,7 +140,8 @@ def _known_decoders():
 def _decoder(value):
     # A decoder name (see `rtl_433 -R help`'s source list) or its protocol number
     if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
-        return str(cv.int_range(min=1, max=999)(int(value)))
+        # rtl_433 numbers decoders by their position in the registry (-R n): only those numbers exist
+        return str(cv.int_range(min=1, max=len(_known_decoders()))(int(value)))
     value = cv.string_strict(value)
     known = _known_decoders()
     if value not in known:

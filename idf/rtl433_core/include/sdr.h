@@ -206,6 +206,12 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
 int sdr_stop(sdr_dev_t *dev);
 int sdr_stop_sync(sdr_dev_t *dev);
 
+#ifdef ESP_RTL_SDR
+/** Stop the input for a fatal exit on the main task: the USB stream stops and the acquire thread is told
+    to end, but it is not joined (it may be waiting on the very task that is exiting). */
+void sdr_abort(sdr_dev_t *dev);
+#endif
+
 /** Redirect SoapySDR library logging.
 */
 void sdr_redirect_logging(void);

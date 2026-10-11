@@ -734,8 +734,12 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
         rpc->response(rpc, 0, "Ok", 0);
     }
     else if (!strcmp(rpc->method, "sample_rate")) {
-        set_sample_rate(cfg, rpc->val);
-        rpc->response(rpc, 0, "Ok", 0);
+        if (set_sample_rate(cfg, rpc->val) < 0) {
+            rpc->response(rpc, -1, "Sample rate not set", 0); // unsupported, failed, or no device open
+        }
+        else {
+            rpc->response(rpc, 0, "Ok", 0);
+        }
     }
 
     // Invalid

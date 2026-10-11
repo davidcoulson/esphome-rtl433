@@ -109,8 +109,8 @@ struct sdr_dev {
     int esp_ppm;
     int esp_biastee;              ///< -1 = leave as is
     int esp_digital_agc;          ///< -1 = leave as is
-    int esp_rate_pending;         ///< a sample-rate change waits for the next retune (one stream restart, not two)
     volatile int esp_streaming;
+    uint32_t esp_tune_gen;        ///< bumped (under lock) by every retune or rate change that took effect
 #endif
 
     char *dev_info;
@@ -1324,7 +1324,6 @@ static int esp_sdr_start_stream(sdr_dev_t *dev)
         dev->esp_streaming = 0; // the reader gives up instead of spinning on NOT_STREAMING
         return -1;
     }
-    dev->esp_rate_pending = 0;
     dev->esp_streaming = 1;
     esp_sdr_apply_gain(dev);
     // Like gain, these need the claimed interface
@@ -1333,6 +1332,19 @@ static int esp_sdr_start_stream(sdr_dev_t *dev)
     if (dev->esp_digital_agc >= 0)
         esp_rtl_sdr_set_rtl_agc(dev->esp_dev, dev->esp_digital_agc != 0);
     return 0;
+}
+
+// Throw away what the driver has buffered: a hot retune or rate change does not clear its pull ring, so
+// whatever is in it was captured with the old settings
+static void esp_sdr_discard_buffered(sdr_dev_t *dev, uint8_t *scratch, size_t len)
+{
+    size_t got;
+    int rounds = 0;
+    do {
+        got = 0;
+        if (esp_rtl_sdr_read(dev->esp_dev, scratch, len, 0, &got) != ESP_OK)
+            break; // empty (timeout) or not streaming
+    } while (got == len && ++rounds < 64); // a full read: there may be more
 }
 
 static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_num, uint32_t buf_len)
@@ -1352,12 +1364,39 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
     if (!dev->esp_streaming && esp_sdr_start_stream(dev) < 0)
         return -1;
 
+    // Every block is labelled with the settings it was captured with. A retune or rate change (main task)
+    // bumps esp_tune_gen once it has taken effect; samples captured before it can still be in the driver's
+    // ring, and a hop retunes while the previous block is being decoded, so the next block starts by
+    // dropping them, and a block that a change landed in the middle of is dropped whole. That costs about
+    // one block per hop, which used to be decoded at the new band's rate with its decoders anyway.
+    uint32_t seen_gen;
+#ifdef THREADS
+    pthread_mutex_lock(&dev->lock);
+#endif
+    seen_gen = dev->esp_tune_gen;
+#ifdef THREADS
+    pthread_mutex_unlock(&dev->lock);
+#endif
+
     dev->running = 1;
     do {
         if (dev->buffer_pos + buf_len > buffer_size)
             dev->buffer_pos = 0;
         uint8_t *buffer = &dev->buffer[dev->buffer_pos];
         dev->buffer_pos += buf_len;
+
+        uint32_t gen;
+#ifdef THREADS
+        pthread_mutex_lock(&dev->lock);
+#endif
+        gen = dev->esp_tune_gen;
+#ifdef THREADS
+        pthread_mutex_unlock(&dev->lock);
+#endif
+        if (gen != seen_gen) {
+            esp_sdr_discard_buffered(dev, buffer, buf_len);
+            seen_gen = gen;
+        }
 
         size_t n_read = 0;
         int exit_acquire = 0;
@@ -1394,9 +1433,12 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
 #endif
         uint32_t sample_rate      = dev->sample_rate;
         uint32_t center_frequency = dev->center_frequency;
+        gen                       = dev->esp_tune_gen;
 #ifdef THREADS
         pthread_mutex_unlock(&dev->lock);
 #endif
+        if (gen != seen_gen)
+            continue; // the settings changed while this block filled: part of it is the old band
         sdr_event_t ev = {
                 .ev               = SDR_EV_DATA,
                 .sample_rate      = sample_rate,
@@ -1418,6 +1460,29 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
     } while (dev->running);
 
     return 0;
+}
+
+void sdr_abort(sdr_dev_t *dev)
+{
+    if (!dev)
+        return;
+#ifdef THREADS
+    pthread_mutex_lock(&dev->lock);
+    dev->exit_acquire = 1;
+#endif
+    dev->running = 0;
+#ifdef THREADS
+    pthread_mutex_unlock(&dev->lock);
+#endif
+    if (dev->esp_dev) {
+        pthread_mutex_lock(&esp_active_lock);
+        if (esp_active == dev->esp_dev)
+            esp_active = NULL;
+        pthread_mutex_unlock(&esp_active_lock);
+        esp_event_dev = NULL;
+        esp_rtl_sdr_stop(dev->esp_dev, 0); // a pending read returns NOT_STREAMING and the reader ends
+        dev->esp_streaming = 0;
+    }
 }
 
 #endif /* ESP_RTL_SDR */
@@ -1561,15 +1626,8 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
 #ifdef ESP_RTL_SDR
     if (dev->esp_dev) {
         dev->esp_freq = freq;
-        if (dev->esp_streaming && dev->esp_rate_pending) {
-            // A hop to a band with a different sample rate: one stop/start at the new rate and frequency
-            esp_rtl_sdr_stop(dev->esp_dev, 0);
-            r = esp_sdr_start_stream(dev);
-        }
-        else {
-            // idle: remembered for the stream start; streaming: a hot retune between bulk transfers
-            r = esp_rtl_sdr_set_center_freq(dev->esp_dev, freq) == ESP_OK ? 0 : -1;
-        }
+        // idle: remembered for the stream start; streaming: a hot retune between bulk transfers
+        r = esp_rtl_sdr_set_center_freq(dev->esp_dev, freq) == ESP_OK ? 0 : -1;
     }
 #endif
 
@@ -1594,10 +1652,16 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
             print_logf(LOG_NOTICE, "SDR", "Tuned to %s.", nice_freq(sdr_get_center_freq(dev)));
     }
 
+    if (r < 0)
+        return r; // a failed retune leaves the device where it was: keep labelling blocks with that
+
 #ifdef THREADS
     pthread_mutex_lock(&dev->lock);
 #endif
     dev->center_frequency = freq;
+#ifdef ESP_RTL_SDR
+    dev->esp_tune_gen++; // the reader drops what the driver buffered before this (see esp_sdr_read_loop)
+#endif
 #ifdef THREADS
     pthread_mutex_unlock(&dev->lock);
 #endif
@@ -1905,15 +1969,30 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
         }
         else if (dev->esp_streaming && rate != dev->esp_rate) {
             // A hop to a band with a different rate: the driver rewrites the resampler between bulk
-            // transfers. If it can't (older driver), fall back to one stop/start in sdr_set_center_freq()
+            // transfers. If it can't (older driver), restart the stream at the new rate now, not at some
+            // later retune: blocks are labelled with dev->sample_rate, which changes when this returns.
+            uint32_t old_rate = dev->esp_rate;
             dev->esp_rate = rate;
-            if (esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) != ESP_OK)
-                dev->esp_rate_pending = 1;
-            r = 0;
+            if (esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) == ESP_OK) {
+                r = 0;
+            }
+            else {
+                esp_rtl_sdr_stop(dev->esp_dev, 0);
+                r = esp_sdr_start_stream(dev);
+                if (r < 0) {
+                    dev->esp_rate = old_rate; // carry on at the rate the blocks are still labelled with
+                    esp_sdr_start_stream(dev);
+                }
+            }
+        }
+        else if (dev->esp_streaming) {
+            r = 0; // already streaming at this rate
         }
         else {
-            dev->esp_rate = rate;
-            r = dev->esp_streaming ? 0 : (esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) == ESP_OK ? 0 : -1);
+            // idle: remembered for the stream start
+            r = esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) == ESP_OK ? 0 : -1;
+            if (r == 0)
+                dev->esp_rate = rate;
         }
     }
 #endif
@@ -1935,10 +2014,16 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
             print_logf(LOG_NOTICE, "SDR", "Sample rate set to %u S/s.", sdr_get_sample_rate(dev)); // Unfortunately, doesn't return real rate
     }
 
+    if (r < 0)
+        return r; // blocks keep the rate the device really runs at
+
 #ifdef THREADS
     pthread_mutex_lock(&dev->lock);
 #endif
     dev->sample_rate = rate;
+#ifdef ESP_RTL_SDR
+    dev->esp_tune_gen++; // as for a retune
+#endif
 #ifdef THREADS
     pthread_mutex_unlock(&dev->lock);
 #endif

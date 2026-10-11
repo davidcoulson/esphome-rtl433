@@ -113,7 +113,7 @@ void set_center_freq(struct r_cfg *cfg, uint32_t center_freq);
 
 void set_freq_correction(struct r_cfg *cfg, int freq_correction);
 
-void set_sample_rate(struct r_cfg *cfg, uint32_t sample_rate);
+int set_sample_rate(struct r_cfg *cfg, uint32_t sample_rate);
 
 void set_gain_str(struct r_cfg *cfg, char const *gain_str);
 

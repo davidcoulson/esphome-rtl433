@@ -69,7 +69,8 @@ class Rtl433Component : public PollingComponent {
   int usb_task_priority_{0};
   uint32_t usb_buffer_{0};
   bool stopped_{false};
-  uint32_t last_overruns_{0}, last_drops_{0}, overruns_total_{0}, drops_total_{0};
+  uint32_t last_overruns_{0}, last_drops_{0}, overruns_total_{0};
+  uint64_t drop_bytes_total_{0};
 
   sensor::Sensor *effective_sample_rate_sensor_{nullptr};
   sensor::Sensor *usb_overruns_sensor_{nullptr};

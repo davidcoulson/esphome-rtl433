@@ -70,7 +70,17 @@ Flush the SDR IQ data frame processing, e.g. on the end of a input file.
 */
 int flush_sdr_flow(r_cfg_t *cfg)
 {
-    return push_sdr_flow(cfg, NULL, 0);
+    int events = push_sdr_flow(cfg, NULL, 0);
+#ifdef ESP_PLATFORM
+    // The look-behind block belongs to the input before the flush (on a hop, the old band at the old
+    // rate): never replay it, or force its tail, into what comes after
+    if (cfg->demod) {
+        cfg->demod->squelch_prev_len    = 0;
+        cfg->demod->squelch_prev_active = 0;
+        cfg->demod->squelch_prev_done   = 0;
+    }
+#endif
+    return events;
 }
 
 /**
@@ -117,17 +127,23 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
        a ~3 ms meter burst in a 64 ms block is invisible unless it is loud. Smaller USB blocks (-b)
        fix that but multiply the acquire->decode hand-offs, each a socket round trip on the USB core,
        which starves the ESPHome loop. So keep the input block and judge it here in 8 ms pieces:
-       each piece runs the normal per-frame path below (squelch decision, look-behind, demod). */
-    #define SQUELCH_PIECE_BYTES 32768u
-    if (demod->squelch_offset > 0 && !demod->squelch_force && len > SQUELCH_PIECE_BYTES
+       each piece runs the normal per-frame path below (squelch decision, look-behind, demod).
+       8 ms at the current rate, whole samples: 32 KB at 2048k, 4000 B at 250k. */
+    uint32_t piece_bytes = demod->samp_rate / 125 * demod->sample_size;
+    if (demod->squelch_offset > 0 && !demod->squelch_force && piece_bytes && len > piece_bytes
             && !demod->load_info.format && !demod->analyze_pulses && !demod->dumper.len && !demod->samp_grab) {
         int events = 0;
-        for (uint32_t off = 0; off < len; off += SQUELCH_PIECE_BYTES) {
-            uint32_t n = len - off < SQUELCH_PIECE_BYTES ? len - off : SQUELCH_PIECE_BYTES;
-            events += push_sdr_flow(cfg, iq_buf + off, n);
+        for (uint32_t off = 0; off < len; off += piece_bytes) {
+            uint32_t n = len - off < piece_bytes ? len - off : piece_bytes;
+            int r = push_sdr_flow(cfg, iq_buf + off, n);
+            if (r < 0) {
+                return r; // an error: the handler exits
+            }
+            events += r;
         }
         return events;
     }
+    int replay_events = 0; // decoded from the look-behind replay below: they count as this block's
 #endif
 
     unsigned n_samples = len / demod->sample_size;
@@ -201,7 +217,7 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
             && !demod->analyze_pulses && !demod->dumper.len && !demod->samp_grab) {
         if (!noise_only && demod->squelch_prev_len && !demod->squelch_prev_done) {
             demod->squelch_force = 1;
-            push_sdr_flow(cfg, demod->squelch_prev_iq, demod->squelch_prev_len);
+            replay_events = push_sdr_flow(cfg, demod->squelch_prev_iq, demod->squelch_prev_len);
             demod->squelch_force = 0;
             // the replay overwrote the envelope buffer: redo this block's
             if (demod->sample_size == 2) {
@@ -555,5 +571,11 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
 
     if (!demod->squelch_force) demod->input_pos += n_samples; // ESP port: replay keeps the position
 
+#ifdef ESP_PLATFORM
+    // The replay's events are this call's too: -E hop and quit-after-success look at the return value
+    if (d_events >= 0 && replay_events != 0) {
+        d_events = replay_events < 0 ? replay_events : d_events + replay_events;
+    }
+#endif
     return d_events;
 }

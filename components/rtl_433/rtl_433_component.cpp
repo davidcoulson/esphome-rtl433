@@ -125,7 +125,9 @@ void Rtl433Component::update() {
   if (!this->stopped_ && rtl433_port_usb_stats(&stats)) {
     // The driver's counters restart with every stream start (each rate-change hop): accumulate the deltas
     this->overruns_total_ += stats.overruns >= this->last_overruns_ ? stats.overruns - this->last_overruns_ : stats.overruns;
-    this->drops_total_ += stats.consumer_drops >= this->last_drops_ ? stats.consumer_drops - this->last_drops_ : stats.consumer_drops;
+    // consumer_drops is bytes the driver dropped from its ring because rtl_433 read too slowly (plus 1 for each
+    // USB transfer it had no slot for, which is also an overrun and next to nothing beside a transfer's bytes)
+    this->drop_bytes_total_ += stats.consumer_drops >= this->last_drops_ ? stats.consumer_drops - this->last_drops_ : stats.consumer_drops;
     this->last_overruns_ = stats.overruns;
     this->last_drops_ = stats.consumer_drops;
     if (this->effective_sample_rate_sensor_ != nullptr)
@@ -133,8 +135,8 @@ void Rtl433Component::update() {
     if (this->usb_overruns_sensor_ != nullptr)
       this->usb_overruns_sensor_->publish_state(this->overruns_total_);
     if (this->dropped_samples_sensor_ != nullptr)
-      this->dropped_samples_sensor_->publish_state(this->drops_total_);
-    ESP_LOGD(TAG, "USB: %u S/s at %u S/s set, %.1f MHz, overruns %u, dropped %u", static_cast<unsigned>(stats.effective_sps),
+      this->dropped_samples_sensor_->publish_state(static_cast<float>(this->drop_bytes_total_ / 2));  // CU8: 2 B/sample
+    ESP_LOGD(TAG, "USB: %u S/s at %u S/s set, %.1f MHz, overruns %u, dropped %u B", static_cast<unsigned>(stats.effective_sps),
              static_cast<unsigned>(stats.sample_rate), stats.frequency / 1e6, static_cast<unsigned>(stats.overruns),
              static_cast<unsigned>(stats.consumer_drops));
   }
