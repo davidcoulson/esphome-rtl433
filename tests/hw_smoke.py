@@ -35,7 +35,10 @@ def ws_first_messages(host, port, count=2, timeout=10):
                f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
     buf = b""
     while b"\r\n\r\n" not in buf:
-        buf += s.recv(4096)
+        chunk = s.recv(4096)
+        if not chunk:
+            raise RuntimeError("connection closed during the WebSocket upgrade")
+        buf += chunk
     head, buf = buf.split(b"\r\n\r\n", 1)
     if b" 101 " not in head.split(b"\r\n")[0]:
         raise RuntimeError(f"WebSocket upgrade refused: {head.splitlines()[0]!r}")
@@ -61,9 +64,12 @@ def ws_first_messages(host, port, count=2, timeout=10):
         if len(msgs) >= count:
             break
         try:
-            buf += s.recv(65536)
+            chunk = s.recv(65536)
         except socket.timeout:
             break
+        if not chunk:
+            break  # closed by the server
+        buf += chunk
     s.close()
     return msgs
 
@@ -104,17 +110,19 @@ def main():
         check("result" in r, "queries still answered in read-only mode")
 
     if bands:
-        seen = {}
+        seen = {}  # frequency -> every rate seen with it
         end = time.time() + a.timeout
         while time.time() < end and set(seen) != set(bands):
+            # Two GETs can straddle a hop: keep the pair only if the frequency is the same on both sides
             f = cmd(a.host, a.port, "get_center_frequency")["result"]
             r = cmd(a.host, a.port, "get_sample_rate")["result"]
-            seen.setdefault(f, r)
+            if cmd(a.host, a.port, "get_center_frequency")["result"] == f:
+                seen.setdefault(f, set()).add(r)
             time.sleep(2)
         for f, r in bands.items():
             check(f in seen, f"visited {f / 1e6:.3f} MHz")
             if f in seen:
-                check(seen[f] == r, f"{f / 1e6:.3f} MHz at {r} S/s (saw {seen[f]})")
+                check(seen[f] == {r}, f"{f / 1e6:.3f} MHz at {r} S/s (saw {sorted(seen[f])})")
         extra = set(seen) - set(bands)
         check(not extra, f"no unexpected frequencies ({sorted(extra)})")
 
