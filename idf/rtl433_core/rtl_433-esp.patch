@@ -1099,7 +1099,7 @@ index c8bb91d..45414d9 100644
      if (cfg->verbosity >= LOG_INFO) {
          print_log(LOG_INFO, "rtl_433", "stopping...");
 diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
-index 2436821..deb3d47 100644
+index 2436821..e53ffd0 100644
 --- a/idf/rtl433_core/src/sdr.c
 +++ b/idf/rtl433_core/src/sdr.c
 @@ -23,6 +23,13 @@
@@ -1135,7 +1135,7 @@ index 2436821..deb3d47 100644
      char *dev_info;
  
      int running;
-@@ -1117,6 +1136,357 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
+@@ -1117,6 +1136,406 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
  
  #endif
  
@@ -1147,6 +1147,8 @@ index 2436821..deb3d47 100644
 +#define ESP_SDR_DEFAULT_RATE 250000u
 +#define ESP_SDR_ATTACH_WAIT_MS 15000
 +#define ESP_SDR_READ_TIMEOUT_MS 500
++#define ESP_SDR_NOT_STREAMING_MAX_MS 5000 // longer than the stop/start a rate change does
++#define ESP_SDR_START_BACKOFF_MAX_MS 30000
 +
 +// The open handle, for the ESPHome component's diagnostics; guarded against a concurrent close
 +static pthread_mutex_t esp_active_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1179,6 +1181,10 @@ index 2436821..deb3d47 100644
 +// Counts the driver's disconnect events. The callback runs on the driver's USB task, which must not touch an
 +// sdr_dev_t: the main task can close (free) it at any moment. The read loop compares this instead.
 +static volatile uint32_t esp_disconnects = 0;
++// Counts the driver's EVT_ERROR events, for the same reason. The driver sends one when the stream dies
++// (FAULT), when an unplugged dongle cannot be closed yet, or when a retune failed and it kept the previous
++// frequency (the samples are then not where rtl_433 decodes). The read loop restarts the input on a change.
++static volatile uint32_t esp_errors = 0;
 +
 +static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, void *ctx)
 +{
@@ -1196,6 +1202,7 @@ index 2436821..deb3d47 100644
 +        print_log(LOG_ERROR, "SDR", "USB SDR disconnected");
 +        break;
 +    case ESP_RTL_SDR_EVT_ERROR: {
++        esp_errors++; // first: the log below may block
 +        esp_rtl_sdr_error_info_t const *err = payload;
 +        if (err)
 +            print_logf(LOG_WARNING, "SDR", "esp_rtl_sdr: %s %s", esp_rtl_sdr_err_to_name(err->code), err->message);
@@ -1313,6 +1320,13 @@ index 2436821..deb3d47 100644
 +        print_logf(LOG_WARNING, "SDR", "Setting tuner gain failed: %s", esp_rtl_sdr_err_to_name(err));
 +}
 +
++// Consecutive stream start failures back off (1 s, 2 s, 4 s ... 30 s) so a dongle that keeps failing is not
++// hammered with a full init sequence on every watchdog restart (the gate is in esp_sdr_read_loop; a rate
++// change's own restart and its fall-back are not throttled). Kept across sdr_open(): the dev is per open,
++// the dongle is not. Any successful start clears it.
++static unsigned esp_start_failures = 0;
++static TickType_t esp_start_not_before = 0;
++
 +static int esp_sdr_start_stream(sdr_dev_t *dev)
 +{
 +    uint32_t freq = dev->esp_freq ? dev->esp_freq : ESP_SDR_DEFAULT_FREQ;
@@ -1320,12 +1334,30 @@ index 2436821..deb3d47 100644
 +    if (dev->esp_ppm)
 +        esp_rtl_sdr_set_freq_correction(dev->esp_dev, dev->esp_ppm);
 +    esp_err_t err = esp_rtl_sdr_start_hz(dev->esp_dev, freq, rate);
++    if (err == ESP_RTL_SDR_ERR_FAULT) {
++        // A failed start (one USB error in the init table) or a dead stream leaves the driver in FAULT, and
++        // start() refuses until stop() or reset() clears it. stop() drains and releases what is left, then
++        // reset() clears FAULT; it refuses (ERR_BUSY) while transfers are still live, and the backoff below
++        // gives them time.
++        print_log(LOG_WARNING, "SDR", "USB SDR driver in FAULT; resetting it");
++        esp_rtl_sdr_stop(dev->esp_dev, 0);
++        esp_err_t rerr = esp_rtl_sdr_reset(dev->esp_dev);
++        if (rerr != ESP_OK && esp_rtl_sdr_get_state(dev->esp_dev) != ESP_RTL_SDR_STATE_IDLE)
++            print_logf(LOG_WARNING, "SDR", "USB SDR reset failed: %s", esp_rtl_sdr_err_to_name(rerr));
++        err = esp_rtl_sdr_start_hz(dev->esp_dev, freq, rate);
++    }
 +    if (err != ESP_OK) {
-+        print_logf(LOG_ERROR, "SDR", "Starting the USB stream at %u Hz, %u S/s failed: %s",
-+                freq, rate, esp_rtl_sdr_err_to_name(err));
++        unsigned backoff_ms = 1000u << (esp_start_failures < 5 ? esp_start_failures : 5);
++        if (backoff_ms > ESP_SDR_START_BACKOFF_MAX_MS)
++            backoff_ms = ESP_SDR_START_BACKOFF_MAX_MS;
++        esp_start_failures++;
++        esp_start_not_before = xTaskGetTickCount() + pdMS_TO_TICKS(backoff_ms);
++        print_logf(LOG_ERROR, "SDR", "Starting the USB stream at %u Hz, %u S/s failed: %s (attempt %u, next in %u s)",
++                freq, rate, esp_rtl_sdr_err_to_name(err), esp_start_failures, backoff_ms / 1000u);
 +        dev->esp_streaming = 0; // the reader gives up instead of spinning on NOT_STREAMING
 +        return -1;
 +    }
++    esp_start_failures = 0;
 +    dev->esp_streaming = 1;
 +    esp_sdr_apply_gain(dev);
 +    // Like gain, these need the claimed interface
@@ -1363,8 +1395,12 @@ index 2436821..deb3d47 100644
 +        dev->buffer_pos = 0;
 +    }
 +
-+    if (!dev->esp_streaming && esp_sdr_start_stream(dev) < 0)
-+        return -1;
++    if (!dev->esp_streaming) {
++        if (esp_start_failures && (int32_t)(xTaskGetTickCount() - esp_start_not_before) < 0)
++            return -1; // still backing off; the stall watchdog calls again
++        if (esp_sdr_start_stream(dev) < 0)
++            return -1;
++    }
 +
 +    // Every block is labelled with the settings it was captured with. A retune or rate change (main task)
 +    // bumps esp_tune_gen once it has taken effect; samples captured before it can still be in the driver's
@@ -1372,6 +1408,7 @@ index 2436821..deb3d47 100644
 +    // dropping them, and a block that a change landed in the middle of is dropped whole. That costs about
 +    // one block per hop, which used to be decoded at the new band's rate with its decoders anyway.
 +    uint32_t seen_disconnects = esp_disconnects; // one after this: NOT_STREAMING means unplugged, give up
++    uint32_t seen_errors = esp_errors;           // one after this: the driver reported a dead or mistuned stream
 +    uint32_t seen_gen;
 +#ifdef THREADS
 +    pthread_mutex_lock(&dev->lock);
@@ -1403,6 +1440,7 @@ index 2436821..deb3d47 100644
 +
 +        size_t n_read = 0;
 +        int exit_acquire = 0;
++        int not_streaming_ms = 0;
 +        while (n_read < buf_len) {
 +#ifdef THREADS
 +            pthread_mutex_lock(&dev->lock);
@@ -1411,14 +1449,25 @@ index 2436821..deb3d47 100644
 +#endif
 +            if (exit_acquire || !dev->running)
 +                break;
++            if (esp_errors != seen_errors) {
++                // Stop delivering; rtl_433's stall watchdog restarts the input with a full start at the
++                // requested frequency and rate.
++                print_log(LOG_WARNING, "SDR", "USB SDR reported an error; restarting the input");
++                dev->esp_streaming = 0;
++                dev->running = 0;
++                break;
++            }
 +            size_t got = 0;
 +            esp_err_t err = esp_rtl_sdr_read(dev->esp_dev, &buffer[n_read], buf_len - n_read,
 +                    ESP_SDR_READ_TIMEOUT_MS, &got);
 +            if (err == ESP_OK) {
 +                n_read += got;
++                not_streaming_ms = 0;
 +            }
-+            else if (err == ESP_RTL_SDR_ERR_NOT_STREAMING && dev->esp_streaming && esp_disconnects == seen_disconnects) {
++            else if (err == ESP_RTL_SDR_ERR_NOT_STREAMING && dev->esp_streaming && esp_disconnects == seen_disconnects
++                    && not_streaming_ms < ESP_SDR_NOT_STREAMING_MAX_MS) {
 +                vTaskDelay(pdMS_TO_TICKS(10)); // a rate change is restarting the stream
++                not_streaming_ms += 10;
 +            }
 +            else if (err != ESP_RTL_SDR_ERR_TIMEOUT && err != ESP_ERR_TIMEOUT) {
 +                // Unplugged or faulted. Stop delivering; rtl_433's stall watchdog restarts the input.
@@ -1493,7 +1542,7 @@ index 2436821..deb3d47 100644
  /* Public API */
  
  int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
-@@ -1124,6 +1494,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
+@@ -1124,6 +1543,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
      if (dev_query && !strncmp(dev_query, "rtl_tcp", 7))
          return rtltcp_open(out_dev, dev_query, verbose);
  
@@ -1505,7 +1554,7 @@ index 2436821..deb3d47 100644
  #if !defined(RTLSDR) && !defined(SOAPYSDR)
      if (verbose)
          print_log(LOG_ERROR, __func__, "No input drivers (RTL-SDR or SoapySDR) compiled in.");
-@@ -1163,6 +1538,18 @@ int sdr_close(sdr_dev_t *dev)
+@@ -1163,6 +1587,18 @@ int sdr_close(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          ret = rtltcp_close(dev->rtl_tcp);
  
@@ -1524,7 +1573,7 @@ index 2436821..deb3d47 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          ret = SoapySDRDevice_unmake(dev->soapy_dev);
-@@ -1213,10 +1600,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1213,10 +1649,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1544,7 +1593,7 @@ index 2436821..deb3d47 100644
  #endif
  
      int r = -1;
-@@ -1226,6 +1622,14 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1226,6 +1671,14 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ, freq);
      }
  
@@ -1559,7 +1608,7 @@ index 2436821..deb3d47 100644
  #ifdef SOAPYSDR
      SoapySDRKwargs args = {0};
      if (dev->soapy_dev) {
-@@ -1247,10 +1651,16 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1247,10 +1700,16 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
              print_logf(LOG_NOTICE, "SDR", "Tuned to %s.", nice_freq(sdr_get_center_freq(dev)));
      }
  
@@ -1576,7 +1625,7 @@ index 2436821..deb3d47 100644
  #ifdef THREADS
      pthread_mutex_unlock(&dev->lock);
  #endif
-@@ -1266,6 +1676,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
+@@ -1266,6 +1725,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_freq;
  
@@ -1591,7 +1640,7 @@ index 2436821..deb3d47 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getFrequency(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1285,10 +1703,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+@@ -1285,10 +1752,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1611,7 +1660,7 @@ index 2436821..deb3d47 100644
  #endif
  
      int r = -1;
-@@ -1296,6 +1723,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+@@ -1296,6 +1772,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ_CORRECTION, ppm);
  
@@ -1625,7 +1674,7 @@ index 2436821..deb3d47 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setFrequencyComponent(dev->soapy_dev, SOAPY_SDR_RX, 0, "CORR", (double)ppm, NULL);
-@@ -1324,10 +1758,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+@@ -1324,10 +1807,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1645,7 +1694,7 @@ index 2436821..deb3d47 100644
  #endif
  
      int r = -1;
-@@ -1335,6 +1778,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+@@ -1335,6 +1827,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_GAIN_MODE, 0);
  
@@ -1661,7 +1710,7 @@ index 2436821..deb3d47 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = soapysdr_auto_gain(dev->soapy_dev, verbose);
-@@ -1360,10 +1812,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+@@ -1360,10 +1861,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1681,7 +1730,7 @@ index 2436821..deb3d47 100644
  #endif
  
      int r = -1;
-@@ -1390,6 +1851,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+@@ -1390,6 +1900,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
                  || rtltcp_command(dev, RTLTCP_SET_GAIN, gain);
      }
  
@@ -1699,7 +1748,7 @@ index 2436821..deb3d47 100644
  #ifdef RTLSDR
      /* Enable manual gain */
      r = rtlsdr_set_tuner_gain_mode(dev->rtlsdr_dev, 1);
-@@ -1466,10 +1938,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1466,10 +1987,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1719,7 +1768,7 @@ index 2436821..deb3d47 100644
  #endif
  
      int r = -1;
-@@ -1479,6 +1960,42 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1479,6 +2009,42 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_SAMPLE_RATE, rate);
      }
  
@@ -1762,7 +1811,7 @@ index 2436821..deb3d47 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0, (double)rate);
-@@ -1496,10 +2013,16 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1496,10 +2062,16 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
              print_logf(LOG_NOTICE, "SDR", "Sample rate set to %u S/s.", sdr_get_sample_rate(dev)); // Unfortunately, doesn't return real rate
      }
  
@@ -1779,7 +1828,7 @@ index 2436821..deb3d47 100644
  #ifdef THREADS
      pthread_mutex_unlock(&dev->lock);
  #endif
-@@ -1515,6 +2038,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
+@@ -1515,6 +2087,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_rate;
  
@@ -1791,7 +1840,7 @@ index 2436821..deb3d47 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1539,6 +2067,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
+@@ -1539,6 +2116,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
      if (!sdr_settings || !*sdr_settings)
          return 0;
  
@@ -1822,7 +1871,7 @@ index 2436821..deb3d47 100644
      if (dev->rtl_tcp) {
          while (sdr_settings && *sdr_settings) {
              char const *val = NULL;
-@@ -1712,6 +2264,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
+@@ -1712,6 +2313,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
      if (dev->rtl_tcp)
          return rtltcp_read_loop(dev, cb, ctx, buf_num, buf_len);
  
@@ -1834,7 +1883,7 @@ index 2436821..deb3d47 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return soapysdr_read_loop(dev, cb, ctx, buf_num, buf_len);
-@@ -1735,6 +2292,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
+@@ -1735,6 +2341,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
          return 0;
      }
  
@@ -1848,7 +1897,7 @@ index 2436821..deb3d47 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev) {
          dev->running = 0;
-@@ -1773,6 +2337,9 @@ void sdr_redirect_logging(void)
+@@ -1773,6 +2386,9 @@ void sdr_redirect_logging(void)
  static THREAD_RETURN THREAD_CALL acquire_thread(void *arg)
  {
      sdr_dev_t *dev = arg;
@@ -1858,7 +1907,7 @@ index 2436821..deb3d47 100644
      print_log(LOG_DEBUG, __func__, "acquire_thread enter...");
  
      int r = sdr_start_sync(dev, dev->async_cb, dev->async_ctx, dev->buf_num, dev->buf_len);
-@@ -1824,10 +2391,19 @@ int sdr_stop(sdr_dev_t *dev)
+@@ -1824,10 +2440,19 @@ int sdr_stop(sdr_dev_t *dev)
      if (!dev)
          return -1;
  

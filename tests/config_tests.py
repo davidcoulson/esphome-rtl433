@@ -113,7 +113,7 @@ CASES = [
     ("rate in the 300k-900k gap is rejected", {"sample_rate": "500k"}, ("error", "sample_rate must be")),
     ("rate above 3.2M is rejected", {"sample_rate": "3300k"}, ("error", "sample_rate must be")),
     ("unknown decoder is rejected", {"decoders": ["not_a_decoder"]}, ("error", "unknown rtl_433 decoder")),
-    ("decoder number past the registry is rejected", {"decoders": [389]}, ("error", "at most 388")),
+    ("decoder number past the registry is rejected", {"decoders": [387]}, ("error", "at most 386")),
     ("gain out of range is rejected", {"gain": 60}, ("error", "")),
     ("missing psram is rejected", lambda c: c.pop("psram"), ("error", "needs PSRAM")),
     ("missing time source is rejected", lambda c: c.pop("time"), ("error", "needs a time source")),

@@ -31,19 +31,21 @@ CONF_GAIN = "gain"
 CONF_PPM_ERROR = "ppm_error"
 CONF_EXTRA_ARGS = "extra_args"
 
-# Pinned to a fork of esp_rtl_sdr v0.8.0-rc3 until upstream picks these up. Upstream's R820T2 path
-# (Blog V3 / Nooelec SMArt v5) never programs the tuner's RF mux / tracking filter for the tuned band,
-# so those dongles stream but never see any RF (hardcoreerik/esp-rtl-sdr#25); LOW-range rates
-# (225k-300k) fail BAD_RATE (#24). The fork fixes both and adds: manual + auto gain and the measured
-# 3.57 MHz IF on the Nooelec, in-place sample-rate change on a hop, a fast sync-read copy, control
-# transfer bounds checks, a USB device layout check, and backports of upstream's bulk-pool leak,
-# halted-endpoint recovery, repeater-before-retune and fault-guard fixes, a fix for a crash when the
-# dongle is unplugged mid-stream, a retry for a failed USB enumeration, working R820T2 auto gain, and
-# the tuner's IF filter / IF following the sample rate as librtlsdr does (without it the 915 MHz ISM
-# band was nearly deaf), and AUTO gain kept across retunes and stream restarts. The fork's own fixes are
-# proposed upstream as hardcoreerik/esp-rtl-sdr#26.
+# Pinned to esp_rtl_sdr master (v0.9.3, a5dc9d8) plus lifecycle fixes on the fork's branch
+# fix/lifecycle-upstream, until upstream takes them. Master already has what the old fork pin was for:
+# the R820T2 RF mux / tracking filter (#25), LOW-range rates (#24), Nooelec gain restore, unplug and
+# enumeration-retry recovery, bounded control transfers and the bulk-pool leak fix. The branch adds
+# recovery from a transient USB error or an unplug without a reboot (interface ownership kept on a failed
+# release, atomic URB count, start() owning the device, endpoint-recovery give-up reported as FAULT),
+# rollback of a failed retune, stale-IQ dropping after a retune or restart, and the other review fixes.
+# An unlocked PLL read only warns (and is counted); it doesn't fail the tune.
+# The per-sample-rate R820T2 IF filter / IF (upstream #47 / #53) is a build option on that branch:
+# CONFIG_ESP_RTL_SDR_ESP_R820T2_IF_VENDOR_FIXED (A, default, = upstream), _IF_TABLE (B, the old fork's
+# table) or _IF_LIBRTLSDR (C), set through esp32: framework: sdkconfig_options.
+# Not in master, so no longer here: the in-place sample-rate change (the driver refuses a rate change while
+# streaming, and sdr_set_sample_rate() then stops and restarts the stream).
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "ac1d77dc9f2ceb9c1f629188ae786a81b89600c2"  # branch gain-state-fixes
+ESP_RTL_SDR_REF = "34d7b1fad69e144f408466fb00368fbada080102"  # branch upstream-a5dc9d8 (fork PRs #3, #4, #5 merged)
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
@@ -134,7 +136,10 @@ def _known_decoders():
     header = RTL433_CORE / "include" / "rtl_433_devices.h"
     import re
 
-    return re.findall(r"DECL\((\w+)\)", header.read_text())
+    # Only the DEVICES list counts: the header also has "#define DECL(name)" and DECL(flex_decoder) after it,
+    # neither of which is a registry entry with a protocol number
+    devices = header.read_text().split("#define DECL(", 1)[0]
+    return re.findall(r"DECL\((\w+)\)", devices)
 
 
 def _decoder(value):
