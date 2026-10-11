@@ -42,7 +42,7 @@ CONF_EXTRA_ARGS = "extra_args"
 # streaming, and sdr_set_sample_rate() then stops and restarts the stream) and the per-sample-rate R820T2
 # IF filter / IF (upstream #47 / #53).
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "295c948298677b07732c19da9bc49252c7886f6d"  # branch fix/lifecycle-upstream
+ESP_RTL_SDR_REF = "0a9123fd59f1a7b0a6032845675bf7207b9d1507"  # branch fix/lifecycle-upstream
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
