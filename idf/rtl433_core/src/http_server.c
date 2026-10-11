@@ -411,17 +411,23 @@ static int json_parse(rpc_t *rpc, struct mg_str const *json)
     /* Loop over all keys of the root object */
     for (i = 1; i < r; i++) {
         if (jsoneq(json->p, &t[i], "cmd") == 0) {
-            i++;
+            if (++i >= r) {
+                break; // key without a value: jsmn is not strict, {"cmd"} parses
+            }
             free(cmd);
             cmd = jsondup(json->p, &t[i]);
         }
         else if (jsoneq(json->p, &t[i], "arg") == 0) {
-            i++;
+            if (++i >= r) {
+                break;
+            }
             free(arg);
             arg = jsondup(json->p, &t[i]);
         }
         else if (jsoneq(json->p, &t[i], "val") == 0) {
-            i++;
+            if (++i >= r) {
+                break;
+            }
             char *endptr = NULL;
             val = strtol(json->p + t[i].start, &endptr, 10);
             // compare endptr to t[i].end
@@ -469,16 +475,22 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
     /* Loop over all keys of the root object */
     for (int i = 1; i < r; i++) {
         if (jsoneq(json->p, &t[i], "jsonrpc") == 0) {
-            i++;
+            if (++i >= r) {
+                break; // key without a value: jsmn is not strict, {"method"} parses
+            }
             // (jsoneq(json->p, &t[i], "2.0") == 0);
         }
         else if (jsoneq(json->p, &t[i], "method") == 0) {
-            i++;
+            if (++i >= r) {
+                break;
+            }
             free(cmd);
             cmd = jsondup(json->p, &t[i]);
         }
         else if (jsoneq(json->p, &t[i], "id") == 0) {
-            i++;
+            if (++i >= r) {
+                break;
+            }
             if (t[i].type == JSMN_STRING) {
                 free(id);
                 id = jsondupq(json->p, &t[i]);
@@ -490,10 +502,11 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
         }
         else if (jsoneq(json->p, &t[i], "params") == 0) {
             //printf("- Params:\n");
-            if (t[i + 1].type != JSMN_ARRAY) {
+            if (i + 1 >= r || t[i + 1].type != JSMN_ARRAY) {
                 continue; /* We expect groups to be an array of strings */
             }
-            for (int j = 0; j < t[i + 1].size; j++) {
+            // the array's size is its element count, not a token count: stop at the parsed tokens
+            for (int j = 0; j < t[i + 1].size && i + j + 2 < r; j++) {
                 jsmntok_t *g = &t[i + j + 2];
                 if (g->type == JSMN_STRING) {
                     free(arg);
@@ -545,7 +558,13 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
         rpc->response(rpc, 0, cfg->dev_query, 0);
     }
     else if (!strcmp(rpc->method, "get_dev_info")) {
-        rpc->response(rpc, 1, cfg->dev_info, 0);
+        if (!cfg->dev_info) {
+            // no device open (none at start-up, or a restart waiting for it): unavailable, {"result": null}
+            rpc->response(rpc, 0, NULL, 0);
+        }
+        else {
+            rpc->response(rpc, 1, cfg->dev_info, 0);
+        }
     }
     else if (!strcmp(rpc->method, "get_gain")) {
         rpc->response(rpc, 0, cfg->gain_str, 0);
@@ -737,9 +756,26 @@ struct http_server_context {
     ring_list_t *history;
 };
 
-struct nc_context {
-    int is_chunked;
+/// What an accepted connection receives besides replies to its own requests.
+enum nc_mode {
+    NC_MODE_HTTP = 0, ///< nothing: plain request/response (keep-alive included)
+    NC_MODE_EVENTS,   ///< /events: every event as an HTTP chunk
+    NC_MODE_STREAM,   ///< /stream: every event as a raw line
 };
+
+/// Per-connection state, set up on MG_EV_ACCEPT and freed on MG_EV_CLOSE.
+/// The listener's user_data is the server context and accepted connections inherit it from there,
+/// so the listener (MG_F_LISTENING) never has one of these and must not be treated as having one.
+struct nc_context {
+    struct http_server_context *server; ///< NULL once the server is stopped
+    enum nc_mode mode;
+};
+
+static struct http_server_context *nc_server(struct mg_connection *nc)
+{
+    struct nc_context *cctx = nc->user_data;
+    return cctx ? cctx->server : NULL;
+}
 
 static void handle_options(struct mg_connection *nc, struct http_message *hm)
 {
@@ -796,7 +832,7 @@ static void handle_openmetrics(struct mg_connection *nc, struct http_message *hm
         return;
     }
 
-    struct http_server_context *ctx = nc->user_data;
+    struct http_server_context *ctx = nc_server(nc);
     r_cfg_t *cfg = ctx->cfg;
 
     time_t now;
@@ -973,13 +1009,8 @@ static void handle_json_events(struct mg_connection *nc, struct http_message *hm
     mg_printf(nc, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
 
     /* Mark connection */
-    struct nc_context *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) {
-        WARN_CALLOC("handle_json_events()");
-        return;
-    }
-    ctx->is_chunked = 1;
-    nc->user_data   = ctx;
+    struct nc_context *cctx = nc->user_data;
+    cctx->mode = NC_MODE_EVENTS;
 
     mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
 }
@@ -992,13 +1023,8 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
     mg_printf(nc, "HTTP/1.1 200 OK\r\n\r\n");
 
     /* Mark connection */
-    struct nc_context *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) {
-        WARN_CALLOC("handle_json_stream()");
-        return;
-    }
-    ctx->is_chunked = 0;
-    nc->user_data   = ctx;
+    struct nc_context *cctx = nc->user_data;
+    cctx->mode = NC_MODE_STREAM;
 
     mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
 }
@@ -1013,7 +1039,7 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
 // xh :8433/cmd cmd==gain arg==10
 static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
 {
-    struct http_server_context *ctx = nc->user_data;
+    struct http_server_context *ctx = nc_server(nc);
     char cmd[100], arg[100], val[100];
     rpc_t rpc = {
             .nc = nc,
@@ -1048,7 +1074,7 @@ static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
 // http POST :8433/jsonrpc jsonrpc=2.0 method=sample_rate params:='[1024000]'
 static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
 {
-    struct http_server_context *ctx = nc->user_data;
+    struct http_server_context *ctx = nc_server(nc);
 
     rpc_t rpc = {
             .nc       = nc,
@@ -1064,8 +1090,8 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
         rpc_exec(&rpc, ctx->cfg);
     }
     else {
-        char *error = "{\"error\":\"Invalid command\"}";
-        mg_send_websocket_frame(nc, WEBSOCKET_OP_TEXT, error, strlen(error));
+        // a JSON-RPC error in the chunked reply (this used to send a WebSocket frame on the HTTP connection)
+        rpc.response(&rpc, -1, "Invalid command", 0);
     }
 
     free(rpc.method);
@@ -1076,7 +1102,7 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
 // Handles WS with JSON command
 static void handle_ws_rpc(struct mg_connection *nc, struct websocket_message *wm)
 {
-    struct http_server_context *ctx = nc->user_data;
+    struct http_server_context *ctx = nc_server(nc);
 
     rpc_t rpc = {
             .nc       = nc,
@@ -1108,28 +1134,61 @@ static void send_keep_alive(struct mg_connection *nc)
         return; // this should not happen
     }
 
-    struct nc_context *ctx = nc->user_data;
-    if (!ctx) {
+    struct nc_context *cctx = nc->user_data;
+    if (!cctx) {
         return; // this should not happen
     }
 
-    if (ctx->is_chunked) {
+    if (cctx->mode == NC_MODE_EVENTS) {
         mg_send_http_chunk(nc, "\r\n", 2);
     }
-    else {
+    else if (cctx->mode == NC_MODE_STREAM) {
         mg_send(nc, "\r\n", 2);
+    }
+    else {
+        return; // not streaming: no keep alive
     }
     mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
 }
 
 static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
 {
+    if (nc->flags & MG_F_LISTENING) {
+        return; // the listener only accepts; its user_data is the server context, not a nc_context
+    }
+    if (ev == MG_EV_ACCEPT) {
+        struct nc_context *cctx = calloc(1, sizeof(*cctx));
+        if (!cctx) {
+            WARN_CALLOC("ev_handler()");
+            nc->user_data = NULL;
+            nc->flags |= MG_F_CLOSE_IMMEDIATELY;
+            return;
+        }
+        cctx->server  = nc->user_data; // inherited from the listener
+        cctx->mode    = NC_MODE_HTTP;
+        nc->user_data = cctx;
+        return;
+    }
+    if (ev == MG_EV_CLOSE) {
+        //fprintf(stderr, "MG_EV_CLOSE %p %p %p\n", ev_data, nc, nc->user_data);
+        free(nc->user_data);
+        nc->user_data = NULL;
+        return;
+    }
+    if (!nc_server(nc)) {
+        // server stopped (or the context allocation failed): no more requests on this connection
+        if (ev == MG_EV_HTTP_REQUEST || ev == MG_EV_WEBSOCKET_FRAME) {
+            nc->flags |= MG_F_SEND_AND_CLOSE;
+        }
+        return;
+    }
+
     switch (ev) {
     case MG_EV_TIMER:
         send_keep_alive(nc);
         break;
     case MG_EV_WEBSOCKET_HANDSHAKE_DONE: {
-        struct http_server_context *ctx = nc->user_data;
+        struct http_server_context *ctx = nc_server(nc);
         /* New websocket connection. Send meta. */
         data_t *meta = meta_data(ctx->cfg);
         data_output_print(ctx->output, meta);
@@ -1177,15 +1236,12 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
         }
 #ifdef SERVE_STATIC
         else {
-            struct http_server_context *ctx = nc->user_data;
+            struct http_server_context *ctx = nc_server(nc);
             mg_serve_http(nc, hm, ctx->server_opts); /* Serve static content */
         }
 #endif
         break;
     }
-    case MG_EV_CLOSE:
-        //fprintf(stderr, "MG_EV_CLOSE %p %p %p\n", ev_data, nc, nc->user_data);
-        break;
     default:
         break;
     }
@@ -1210,21 +1266,26 @@ static void http_broadcast_send(struct http_server_context *ctx, char const *msg
         free(ring_list_push(ctx->history, dup));
     }
 
+    // Only to this server's subscribers: WebSockets and /events or /stream. Never the listener, whose
+    // send buffer is never drained, and never plain HTTP connections, whose replies events would corrupt.
     for (nc = mg_next(mgr, NULL); nc != NULL; nc = mg_next(mgr, nc)) {
-        if (nc->handler != ev_handler) {
+        if (nc->handler != ev_handler || (nc->flags & MG_F_LISTENING)) {
             continue;
         }
 
-        struct nc_context *cctx = nc->user_data; // might not be valid
+        struct nc_context *cctx = nc->user_data;
+        if (!cctx || cctx->server != ctx) {
+            continue;
+        }
         if (is_websocket(nc)) {
             mg_send_websocket_frame(nc, WEBSOCKET_OP_TEXT, msg, len);
         }
-        else if (cctx && cctx->is_chunked) {
+        else if (cctx->mode == NC_MODE_EVENTS) {
             mg_send_http_chunk(nc, msg, len);
             mg_send_http_chunk(nc, "\r\n", 2);
             mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
         }
-        else if (cctx && !cctx->is_chunked) {
+        else if (cctx->mode == NC_MODE_STREAM) {
             mg_send(nc, msg, len);
             mg_send(nc, "\r\n", 2);
             mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
@@ -1296,20 +1357,24 @@ static int http_server_stop(struct http_server_context *ctx)
     // close connections with a goodbye
     struct mg_mgr *mgr = ctx->conn->mgr;
     for (struct mg_connection *nc = mg_next(mgr, NULL); nc != NULL; nc = mg_next(mgr, nc)) {
-        if (nc->handler != ev_handler) {
+        if (nc->handler != ev_handler || (nc->flags & MG_F_LISTENING)) {
             continue;
         }
 
-        struct nc_context *cctx = nc->user_data; // might not be valid
+        struct nc_context *cctx = nc->user_data;
+        if (!cctx || cctx->server != ctx) {
+            continue;
+        }
+        cctx->server = NULL; // ctx is freed below
         if (is_websocket(nc)) {
             mg_send_websocket_frame(nc, WEBSOCKET_OP_TEXT, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
         }
-        else if (cctx && cctx->is_chunked) {
+        else if (cctx->mode == NC_MODE_EVENTS) {
             mg_send_http_chunk(nc, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
             mg_send_http_chunk(nc, "\r\n", 2);
             mg_send_http_chunk(nc, "", 0);            /* Send empty chunk, the end of response */
         }
-        else if (cctx && !cctx->is_chunked) {
+        else if (cctx->mode == NC_MODE_STREAM) {
             mg_send(nc, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
             mg_send(nc, "\r\n", 2);
         }

@@ -1203,21 +1203,14 @@ static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, voi
     }
 }
 
+static int esp_opened_before = 0; // only the first open (start-up) waits for the dongle
+static int esp_absent_logged = 0; // "no dongle" is logged once per absence, not on every retry
+
 static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
 {
     UNUSED(verbose);
-    sdr_dev_t *dev = calloc(1, sizeof(sdr_dev_t));
-    if (!dev) {
-        WARN_CALLOC("esp_sdr_open()");
-        return -1;
-    }
-#ifdef THREADS
-    pthread_mutex_init(&dev->lock, NULL);
-#endif
-    dev->esp_gain = -1;
-    dev->esp_biastee = -1;
-    dev->esp_digital_agc = -1;
-
+    int may_wait = !esp_opened_before;
+    esp_opened_before = 1;
     if (esp_handle == NULL) {
         esp_rtl_sdr_config_t config;
         esp_rtl_sdr_config_default(&config);
@@ -1235,33 +1228,48 @@ static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
             // row, so it stays off for this boot rather than boot-looping. Only a real latch reaches here.
             print_log(LOG_ERROR, __func__, "USB host disabled for this boot after repeated USB crashes; power-cycle to retry");
             esp_handle = NULL;
-            free(dev);
             return -1;
         }
         if (err != ESP_OK) {
             print_logf(LOG_ERROR, __func__, "esp_rtl_sdr_install failed: %s", esp_rtl_sdr_err_to_name(err));
             esp_handle = NULL;
-            free(dev);
             return -1;
         }
     }
-    dev->esp_dev = esp_handle;
-    esp_event_dev = dev;
-    esp_err_t err;
 
-    // The dongle enumerates asynchronously after the host library starts
+    // The dongle enumerates asynchronously after the host library starts, so the first open (start-up,
+    // right after the install, before the event loop runs) waits for it. Every later open is a retry from
+    // timer_handler() on the event loop, which comes back every 1.5 s: it only looks, because waiting
+    // there stalls HTTP and WebSocket for as long as the dongle is missing.
     esp_rtl_sdr_device_info_t info = {0};
     int waited_ms = 0;
-    while (esp_rtl_sdr_get_device_info(dev->esp_dev, &info) != ESP_OK || !info.present) {
-        if (waited_ms >= ESP_SDR_ATTACH_WAIT_MS) {
-            print_log(LOG_ERROR, __func__, "No supported RTL-SDR dongle on the USB host port");
-            esp_event_dev = NULL;
-            free(dev);
+    while (esp_rtl_sdr_get_device_info(esp_handle, &info) != ESP_OK || !info.present) {
+        if (!may_wait || waited_ms >= ESP_SDR_ATTACH_WAIT_MS) {
+            if (!esp_absent_logged)
+                print_log(LOG_ERROR, __func__, "No supported RTL-SDR dongle on the USB host port");
+            esp_absent_logged = 1;
             return -1;
         }
         vTaskDelay(pdMS_TO_TICKS(100));
         waited_ms += 100;
     }
+    esp_absent_logged = 0;
+
+    // Allocated only once the dongle is there: nothing to undo on the failure paths above
+    sdr_dev_t *dev = calloc(1, sizeof(sdr_dev_t));
+    if (!dev) {
+        WARN_CALLOC("esp_sdr_open()");
+        return -1;
+    }
+#ifdef THREADS
+    pthread_mutex_init(&dev->lock, NULL);
+#endif
+    dev->esp_gain = -1;
+    dev->esp_biastee = -1;
+    dev->esp_digital_agc = -1;
+    dev->esp_dev = esp_handle;
+    esp_event_dev = dev;
+    esp_err_t err;
 
     // "esp:SERIAL" picks one dongle when several share a hub
     char const *serial = arg_param(dev_query);
