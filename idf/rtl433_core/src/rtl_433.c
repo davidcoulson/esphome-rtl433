@@ -1320,6 +1320,7 @@ static int start_sdr(r_cfg_t *cfg)
 {
     int r;
     if (cfg->dev) {
+        cfg->dev_info = NULL; // owned by the dev: do not leave it dangling if the reopen fails
         r = sdr_close(cfg->dev);
         cfg->dev = NULL;
         if (r < 0) {
