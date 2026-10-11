@@ -98,11 +98,14 @@ void set_freq_correction(r_cfg_t *cfg, int freq_correction)
     sdr_set_freq_correction(cfg->dev, freq_correction, 0);
 }
 
-void set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
+int set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
 {
-    cfg->hop_rates = 0; // a rate set by hand applies to every band
     // cfg->samp_rate = sample_rate; // actually applied in the sdr event
-    sdr_set_sample_rate(cfg->dev, sample_rate, 0);
+    int r = sdr_set_sample_rate(cfg->dev, sample_rate, 0);
+    if (r >= 0) {
+        cfg->hop_rates = 0; // a rate set by hand applies to every band (a refused one changes nothing)
+    }
+    return r;
 }
 
 void set_gain_str(struct r_cfg *cfg, char const *gain_str)

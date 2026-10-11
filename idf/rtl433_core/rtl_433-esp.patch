@@ -1,3 +1,16 @@
+diff --git a/idf/rtl433_core/include/r_api.h b/idf/rtl433_core/include/r_api.h
+index f742b8c..2ebb253 100644
+--- a/idf/rtl433_core/include/r_api.h
++++ b/idf/rtl433_core/include/r_api.h
+@@ -113,7 +113,7 @@ void set_center_freq(struct r_cfg *cfg, uint32_t center_freq);
+ 
+ void set_freq_correction(struct r_cfg *cfg, int freq_correction);
+ 
+-void set_sample_rate(struct r_cfg *cfg, uint32_t sample_rate);
++int set_sample_rate(struct r_cfg *cfg, uint32_t sample_rate);
+ 
+ void set_gain_str(struct r_cfg *cfg, char const *gain_str);
+ 
 diff --git a/idf/rtl433_core/include/r_private.h b/idf/rtl433_core/include/r_private.h
 index 7a2fd71..70e37db 100644
 --- a/idf/rtl433_core/include/r_private.h
@@ -42,7 +55,7 @@ index e01ca64..1922244 100644
      int duration;
      time_t stop_time;
 diff --git a/idf/rtl433_core/src/http_server.c b/idf/rtl433_core/src/http_server.c
-index d35ae6c..1a64ede 100644
+index d35ae6c..588de49 100644
 --- a/idf/rtl433_core/src/http_server.c
 +++ b/idf/rtl433_core/src/http_server.c
 @@ -411,17 +411,23 @@ static int json_parse(rpc_t *rpc, struct mg_str const *json)
@@ -163,7 +176,22 @@ index d35ae6c..1a64ede 100644
      }
      else if (!strcmp(rpc->method, "center_frequency")) {
          set_center_freq(cfg, rpc->val);
-@@ -725,10 +756,27 @@ struct http_server_context {
+@@ -703,8 +734,12 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
+         rpc->response(rpc, 0, "Ok", 0);
+     }
+     else if (!strcmp(rpc->method, "sample_rate")) {
+-        set_sample_rate(cfg, rpc->val);
+-        rpc->response(rpc, 0, "Ok", 0);
++        if (set_sample_rate(cfg, rpc->val) < 0) {
++            rpc->response(rpc, -1, "Sample rate not set", 0); // unsupported, failed, or no device open
++        }
++        else {
++            rpc->response(rpc, 0, "Ok", 0);
++        }
+     }
+ 
+     // Invalid
+@@ -725,10 +760,27 @@ struct http_server_context {
      ring_list_t *history;
  };
  
@@ -192,7 +220,7 @@ index d35ae6c..1a64ede 100644
  static void handle_options(struct mg_connection *nc, struct http_message *hm)
  {
      UNUSED(hm);
-@@ -784,7 +832,7 @@ static void handle_openmetrics(struct mg_connection *nc, struct http_message *hm
+@@ -784,7 +836,7 @@ static void handle_openmetrics(struct mg_connection *nc, struct http_message *hm
          return;
      }
  
@@ -201,7 +229,7 @@ index d35ae6c..1a64ede 100644
      r_cfg_t *cfg = ctx->cfg;
  
      time_t now;
-@@ -961,13 +1009,8 @@ static void handle_json_events(struct mg_connection *nc, struct http_message *hm
+@@ -961,13 +1013,8 @@ static void handle_json_events(struct mg_connection *nc, struct http_message *hm
      mg_printf(nc, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
  
      /* Mark connection */
@@ -217,7 +245,7 @@ index d35ae6c..1a64ede 100644
  
      mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
  }
-@@ -980,13 +1023,8 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
+@@ -980,13 +1027,8 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
      mg_printf(nc, "HTTP/1.1 200 OK\r\n\r\n");
  
      /* Mark connection */
@@ -233,7 +261,7 @@ index d35ae6c..1a64ede 100644
  
      mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
  }
-@@ -1001,7 +1039,7 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
+@@ -1001,7 +1043,7 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
  // xh :8433/cmd cmd==gain arg==10
  static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
  {
@@ -242,7 +270,7 @@ index d35ae6c..1a64ede 100644
      char cmd[100], arg[100], val[100];
      rpc_t rpc = {
              .nc = nc,
-@@ -1036,7 +1074,7 @@ static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
+@@ -1036,7 +1078,7 @@ static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
  // http POST :8433/jsonrpc jsonrpc=2.0 method=sample_rate params:='[1024000]'
  static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
  {
@@ -251,7 +279,7 @@ index d35ae6c..1a64ede 100644
  
      rpc_t rpc = {
              .nc       = nc,
-@@ -1052,8 +1090,8 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
+@@ -1052,8 +1094,8 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
          rpc_exec(&rpc, ctx->cfg);
      }
      else {
@@ -262,7 +290,7 @@ index d35ae6c..1a64ede 100644
      }
  
      free(rpc.method);
-@@ -1064,7 +1102,7 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
+@@ -1064,7 +1106,7 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
  // Handles WS with JSON command
  static void handle_ws_rpc(struct mg_connection *nc, struct websocket_message *wm)
  {
@@ -271,7 +299,7 @@ index d35ae6c..1a64ede 100644
  
      rpc_t rpc = {
              .nc       = nc,
-@@ -1096,28 +1134,61 @@ static void send_keep_alive(struct mg_connection *nc)
+@@ -1096,28 +1138,61 @@ static void send_keep_alive(struct mg_connection *nc)
          return; // this should not happen
      }
  
@@ -338,7 +366,7 @@ index d35ae6c..1a64ede 100644
          /* New websocket connection. Send meta. */
          data_t *meta = meta_data(ctx->cfg);
          data_output_print(ctx->output, meta);
-@@ -1165,15 +1236,12 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
+@@ -1165,15 +1240,12 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
          }
  #ifdef SERVE_STATIC
          else {
@@ -355,7 +383,7 @@ index d35ae6c..1a64ede 100644
      default:
          break;
      }
-@@ -1198,21 +1266,26 @@ static void http_broadcast_send(struct http_server_context *ctx, char const *msg
+@@ -1198,21 +1270,26 @@ static void http_broadcast_send(struct http_server_context *ctx, char const *msg
          free(ring_list_push(ctx->history, dup));
      }
  
@@ -386,7 +414,7 @@ index d35ae6c..1a64ede 100644
              mg_send(nc, msg, len);
              mg_send(nc, "\r\n", 2);
              mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
-@@ -1284,20 +1357,24 @@ static int http_server_stop(struct http_server_context *ctx)
+@@ -1284,20 +1361,24 @@ static int http_server_stop(struct http_server_context *ctx)
      // close connections with a goodbye
      struct mg_mgr *mgr = ctx->conn->mgr;
      for (struct mg_connection *nc = mg_next(mgr, NULL); nc != NULL; nc = mg_next(mgr, nc)) {
@@ -443,7 +471,7 @@ index dce0404..8413209 100644
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
 diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
-index 2a94dc5..dc9963c 100644
+index 2a94dc5..37a9bc0 100644
 --- a/idf/rtl433_core/src/r_api.c
 +++ b/idf/rtl433_core/src/r_api.c
 @@ -84,6 +84,10 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
@@ -457,15 +485,24 @@ index 2a94dc5..dc9963c 100644
      // cfg->center_frequency = center_freq; // actually applied in the sdr event
      sdr_set_center_freq(cfg->dev, center_freq, 1);
  }
-@@ -96,6 +100,7 @@ void set_freq_correction(r_cfg_t *cfg, int freq_correction)
- 
- void set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
- {
-+    cfg->hop_rates = 0; // a rate set by hand applies to every band
-     // cfg->samp_rate = sample_rate; // actually applied in the sdr event
-     sdr_set_sample_rate(cfg->dev, sample_rate, 0);
+@@ -94,10 +98,14 @@ void set_freq_correction(r_cfg_t *cfg, int freq_correction)
+     sdr_set_freq_correction(cfg->dev, freq_correction, 0);
  }
-@@ -130,21 +135,22 @@ void r_init_cfg(r_cfg_t *cfg)
+ 
+-void set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
++int set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
+ {
+     // cfg->samp_rate = sample_rate; // actually applied in the sdr event
+-    sdr_set_sample_rate(cfg->dev, sample_rate, 0);
++    int r = sdr_set_sample_rate(cfg->dev, sample_rate, 0);
++    if (r >= 0) {
++        cfg->hop_rates = 0; // a rate set by hand applies to every band (a refused one changes nothing)
++    }
++    return r;
+ }
+ 
+ void set_gain_str(struct r_cfg *cfg, char const *gain_str)
+@@ -130,21 +138,22 @@ void r_init_cfg(r_cfg_t *cfg)
      list_ensure_size(&cfg->output_handler, 16);
  
      // collect devices list, this should be a module
@@ -495,7 +532,7 @@ index 2a94dc5..dc9963c 100644
  
      cfg->demod = calloc(1, sizeof(*cfg->demod));
      if (!cfg->demod)
-@@ -217,6 +223,7 @@ void r_free_cfg(r_cfg_t *cfg)
+@@ -217,6 +226,7 @@ void r_free_cfg(r_cfg_t *cfg)
  
      list_free_elems(&cfg->in_files, NULL);
  
@@ -503,7 +540,7 @@ index 2a94dc5..dc9963c 100644
      free(cfg->demod);
      cfg->demod = NULL;
  
-@@ -591,6 +598,9 @@ void r_redirect_logging(r_cfg_t *cfg)
+@@ -591,6 +601,9 @@ void r_redirect_logging(r_cfg_t *cfg)
  /** Pass the data structure to all output handlers. Frees data afterwards. */
  void event_occurred_handler(r_cfg_t *cfg, data_t *data)
  {
@@ -513,7 +550,7 @@ index 2a94dc5..dc9963c 100644
      // prepend "time" if requested
      if (cfg->report_time != REPORT_TIME_OFF) {
          char time_str[LOCAL_TIME_BUFLEN];
-@@ -629,9 +639,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
+@@ -629,9 +642,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
  }
  
  /** Pass the data structure to all output handlers. Frees data afterwards. */
@@ -853,7 +890,7 @@ index c8bb91d..9f2bf8f 100644
          }
      }
 diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
-index 2436821..1dd5835 100644
+index 2436821..615ab22 100644
 --- a/idf/rtl433_core/src/sdr.c
 +++ b/idf/rtl433_core/src/sdr.c
 @@ -23,6 +23,13 @@
@@ -870,7 +907,7 @@ index 2436821..1dd5835 100644
  #ifdef RTLSDR
  #include <rtl-sdr.h>
  #if defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
-@@ -94,6 +101,18 @@ struct sdr_dev {
+@@ -94,6 +101,17 @@ struct sdr_dev {
      void *rtlsdr_cb_ctx;
  #endif
  
@@ -882,14 +919,13 @@ index 2436821..1dd5835 100644
 +    int esp_ppm;
 +    int esp_biastee;              ///< -1 = leave as is
 +    int esp_digital_agc;          ///< -1 = leave as is
-+    int esp_rate_pending;         ///< a sample-rate change waits for the next retune (one stream restart, not two)
 +    volatile int esp_streaming;
 +#endif
 +
      char *dev_info;
  
      int running;
-@@ -1117,6 +1136,292 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
+@@ -1117,6 +1135,291 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
  
  #endif
  
@@ -1081,7 +1117,6 @@ index 2436821..1dd5835 100644
 +        dev->esp_streaming = 0; // the reader gives up instead of spinning on NOT_STREAMING
 +        return -1;
 +    }
-+    dev->esp_rate_pending = 0;
 +    dev->esp_streaming = 1;
 +    esp_sdr_apply_gain(dev);
 +    // Like gain, these need the claimed interface
@@ -1182,7 +1217,7 @@ index 2436821..1dd5835 100644
  /* Public API */
  
  int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
-@@ -1124,6 +1429,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
+@@ -1124,6 +1427,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
      if (dev_query && !strncmp(dev_query, "rtl_tcp", 7))
          return rtltcp_open(out_dev, dev_query, verbose);
  
@@ -1194,7 +1229,7 @@ index 2436821..1dd5835 100644
  #if !defined(RTLSDR) && !defined(SOAPYSDR)
      if (verbose)
          print_log(LOG_ERROR, __func__, "No input drivers (RTL-SDR or SoapySDR) compiled in.");
-@@ -1163,6 +1473,19 @@ int sdr_close(sdr_dev_t *dev)
+@@ -1163,6 +1471,19 @@ int sdr_close(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          ret = rtltcp_close(dev->rtl_tcp);
  
@@ -1214,7 +1249,7 @@ index 2436821..1dd5835 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          ret = SoapySDRDevice_unmake(dev->soapy_dev);
-@@ -1213,10 +1536,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1213,10 +1534,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1234,29 +1269,22 @@ index 2436821..1dd5835 100644
  #endif
  
      int r = -1;
-@@ -1226,6 +1558,21 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1226,6 +1556,14 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ, freq);
      }
  
 +#ifdef ESP_RTL_SDR
 +    if (dev->esp_dev) {
 +        dev->esp_freq = freq;
-+        if (dev->esp_streaming && dev->esp_rate_pending) {
-+            // A hop to a band with a different sample rate: one stop/start at the new rate and frequency
-+            esp_rtl_sdr_stop(dev->esp_dev, 0);
-+            r = esp_sdr_start_stream(dev);
-+        }
-+        else {
-+            // idle: remembered for the stream start; streaming: a hot retune between bulk transfers
-+            r = esp_rtl_sdr_set_center_freq(dev->esp_dev, freq) == ESP_OK ? 0 : -1;
-+        }
++        // idle: remembered for the stream start; streaming: a hot retune between bulk transfers
++        r = esp_rtl_sdr_set_center_freq(dev->esp_dev, freq) == ESP_OK ? 0 : -1;
 +    }
 +#endif
 +
  #ifdef SOAPYSDR
      SoapySDRKwargs args = {0};
      if (dev->soapy_dev) {
-@@ -1266,6 +1613,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
+@@ -1266,6 +1604,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_freq;
  
@@ -1271,7 +1299,7 @@ index 2436821..1dd5835 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getFrequency(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1285,10 +1640,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+@@ -1285,10 +1631,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1291,7 +1319,7 @@ index 2436821..1dd5835 100644
  #endif
  
      int r = -1;
-@@ -1296,6 +1660,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+@@ -1296,6 +1651,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ_CORRECTION, ppm);
  
@@ -1305,7 +1333,7 @@ index 2436821..1dd5835 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setFrequencyComponent(dev->soapy_dev, SOAPY_SDR_RX, 0, "CORR", (double)ppm, NULL);
-@@ -1324,10 +1695,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+@@ -1324,10 +1686,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1325,7 +1353,7 @@ index 2436821..1dd5835 100644
  #endif
  
      int r = -1;
-@@ -1335,6 +1715,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+@@ -1335,6 +1706,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_GAIN_MODE, 0);
  
@@ -1341,7 +1369,7 @@ index 2436821..1dd5835 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = soapysdr_auto_gain(dev->soapy_dev, verbose);
-@@ -1360,10 +1749,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+@@ -1360,10 +1740,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1361,7 +1389,7 @@ index 2436821..1dd5835 100644
  #endif
  
      int r = -1;
-@@ -1390,6 +1788,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+@@ -1390,6 +1779,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
                  || rtltcp_command(dev, RTLTCP_SET_GAIN, gain);
      }
  
@@ -1379,7 +1407,7 @@ index 2436821..1dd5835 100644
  #ifdef RTLSDR
      /* Enable manual gain */
      r = rtlsdr_set_tuner_gain_mode(dev->rtlsdr_dev, 1);
-@@ -1466,10 +1875,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1466,10 +1866,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1399,7 +1427,7 @@ index 2436821..1dd5835 100644
  #endif
  
      int r = -1;
-@@ -1479,6 +1897,27 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1479,6 +1888,42 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_SAMPLE_RATE, rate);
      }
  
@@ -1411,15 +1439,30 @@ index 2436821..1dd5835 100644
 +        }
 +        else if (dev->esp_streaming && rate != dev->esp_rate) {
 +            // A hop to a band with a different rate: the driver rewrites the resampler between bulk
-+            // transfers. If it can't (older driver), fall back to one stop/start in sdr_set_center_freq()
++            // transfers. If it can't (older driver), restart the stream at the new rate now, not at some
++            // later retune: blocks are labelled with dev->sample_rate, which changes when this returns.
++            uint32_t old_rate = dev->esp_rate;
 +            dev->esp_rate = rate;
-+            if (esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) != ESP_OK)
-+                dev->esp_rate_pending = 1;
-+            r = 0;
++            if (esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) == ESP_OK) {
++                r = 0;
++            }
++            else {
++                esp_rtl_sdr_stop(dev->esp_dev, 0);
++                r = esp_sdr_start_stream(dev);
++                if (r < 0) {
++                    dev->esp_rate = old_rate; // carry on at the rate the blocks are still labelled with
++                    esp_sdr_start_stream(dev);
++                }
++            }
++        }
++        else if (dev->esp_streaming) {
++            r = 0; // already streaming at this rate
 +        }
 +        else {
-+            dev->esp_rate = rate;
-+            r = dev->esp_streaming ? 0 : (esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) == ESP_OK ? 0 : -1);
++            // idle: remembered for the stream start
++            r = esp_rtl_sdr_set_sample_rate(dev->esp_dev, rate) == ESP_OK ? 0 : -1;
++            if (r == 0)
++                dev->esp_rate = rate;
 +        }
 +    }
 +#endif
@@ -1427,7 +1470,17 @@ index 2436821..1dd5835 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0, (double)rate);
-@@ -1515,6 +1954,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
+@@ -1496,6 +1941,9 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+             print_logf(LOG_NOTICE, "SDR", "Sample rate set to %u S/s.", sdr_get_sample_rate(dev)); // Unfortunately, doesn't return real rate
+     }
+ 
++    if (r < 0)
++        return r; // blocks keep the rate the device really runs at
++
+ #ifdef THREADS
+     pthread_mutex_lock(&dev->lock);
+ #endif
+@@ -1515,6 +1963,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_rate;
  
@@ -1439,7 +1492,7 @@ index 2436821..1dd5835 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1539,6 +1983,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
+@@ -1539,6 +1992,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
      if (!sdr_settings || !*sdr_settings)
          return 0;
  
@@ -1470,7 +1523,7 @@ index 2436821..1dd5835 100644
      if (dev->rtl_tcp) {
          while (sdr_settings && *sdr_settings) {
              char const *val = NULL;
-@@ -1712,6 +2180,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
+@@ -1712,6 +2189,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
      if (dev->rtl_tcp)
          return rtltcp_read_loop(dev, cb, ctx, buf_num, buf_len);
  
@@ -1482,7 +1535,7 @@ index 2436821..1dd5835 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return soapysdr_read_loop(dev, cb, ctx, buf_num, buf_len);
-@@ -1735,6 +2208,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
+@@ -1735,6 +2217,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
          return 0;
      }
  
@@ -1496,7 +1549,7 @@ index 2436821..1dd5835 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev) {
          dev->running = 0;
-@@ -1773,6 +2253,9 @@ void sdr_redirect_logging(void)
+@@ -1773,6 +2262,9 @@ void sdr_redirect_logging(void)
  static THREAD_RETURN THREAD_CALL acquire_thread(void *arg)
  {
      sdr_dev_t *dev = arg;
@@ -1506,7 +1559,7 @@ index 2436821..1dd5835 100644
      print_log(LOG_DEBUG, __func__, "acquire_thread enter...");
  
      int r = sdr_start_sync(dev, dev->async_cb, dev->async_ctx, dev->buf_num, dev->buf_len);
-@@ -1824,10 +2307,19 @@ int sdr_stop(sdr_dev_t *dev)
+@@ -1824,10 +2316,19 @@ int sdr_stop(sdr_dev_t *dev)
      if (!dev)
          return -1;
  
