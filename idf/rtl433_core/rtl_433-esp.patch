@@ -1,10 +1,13 @@
 diff --git a/idf/rtl433_core/include/r_api.h b/idf/rtl433_core/include/r_api.h
-index f742b8c..2ebb253 100644
+index f742b8c..04724a0 100644
 --- a/idf/rtl433_core/include/r_api.h
 +++ b/idf/rtl433_core/include/r_api.h
-@@ -113,7 +113,7 @@ void set_center_freq(struct r_cfg *cfg, uint32_t center_freq);
+@@ -111,9 +111,9 @@ struct mg_mgr *get_mgr(struct r_cfg *cfg);
  
- void set_freq_correction(struct r_cfg *cfg, int freq_correction);
+ void set_center_freq(struct r_cfg *cfg, uint32_t center_freq);
+ 
+-void set_freq_correction(struct r_cfg *cfg, int freq_correction);
++int set_freq_correction(struct r_cfg *cfg, int freq_correction);
  
 -void set_sample_rate(struct r_cfg *cfg, uint32_t sample_rate);
 +int set_sample_rate(struct r_cfg *cfg, uint32_t sample_rate);
@@ -72,7 +75,7 @@ index 241d2bd..c23e9a0 100644
  */
  void sdr_redirect_logging(void);
 diff --git a/idf/rtl433_core/src/http_server.c b/idf/rtl433_core/src/http_server.c
-index d35ae6c..87b36af 100644
+index d35ae6c..8ee6599 100644
 --- a/idf/rtl433_core/src/http_server.c
 +++ b/idf/rtl433_core/src/http_server.c
 @@ -411,17 +411,23 @@ static int json_parse(rpc_t *rpc, struct mg_str const *json)
@@ -177,7 +180,7 @@ index d35ae6c..87b36af 100644
      }
      else if (!strcmp(rpc->method, "get_gain")) {
          rpc->response(rpc, 0, cfg->gain_str, 0);
-@@ -689,10 +718,12 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
+@@ -689,22 +718,32 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
      }
      else if (!strcmp(rpc->method, "gain")) {
          if (!rpc->arg) {
@@ -193,8 +196,17 @@ index d35ae6c..87b36af 100644
      }
      else if (!strcmp(rpc->method, "center_frequency")) {
          set_center_freq(cfg, rpc->val);
-@@ -703,8 +734,12 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
          rpc->response(rpc, 0, "Ok", 0);
+     }
+     else if (!strcmp(rpc->method, "ppm_error")) {
+-        set_freq_correction(cfg, rpc->val);
+-        rpc->response(rpc, 0, "Ok", 0);
++        if (set_freq_correction(cfg, rpc->val) < 0) {
++            rpc->response(rpc, -1, "Frequency correction not set", 0); // failed, or no device open
++        }
++        else {
++            rpc->response(rpc, 0, "Ok", 0);
++        }
      }
      else if (!strcmp(rpc->method, "sample_rate")) {
 -        set_sample_rate(cfg, rpc->val);
@@ -208,7 +220,7 @@ index d35ae6c..87b36af 100644
      }
  
      // Invalid
-@@ -725,10 +760,27 @@ struct http_server_context {
+@@ -725,10 +764,27 @@ struct http_server_context {
      ring_list_t *history;
  };
  
@@ -237,7 +249,7 @@ index d35ae6c..87b36af 100644
  static void handle_options(struct mg_connection *nc, struct http_message *hm)
  {
      UNUSED(hm);
-@@ -784,7 +836,7 @@ static void handle_openmetrics(struct mg_connection *nc, struct http_message *hm
+@@ -784,7 +840,7 @@ static void handle_openmetrics(struct mg_connection *nc, struct http_message *hm
          return;
      }
  
@@ -246,7 +258,7 @@ index d35ae6c..87b36af 100644
      r_cfg_t *cfg = ctx->cfg;
  
      time_t now;
-@@ -961,13 +1013,8 @@ static void handle_json_events(struct mg_connection *nc, struct http_message *hm
+@@ -961,13 +1017,8 @@ static void handle_json_events(struct mg_connection *nc, struct http_message *hm
      mg_printf(nc, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
  
      /* Mark connection */
@@ -262,7 +274,7 @@ index d35ae6c..87b36af 100644
  
      mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
  }
-@@ -980,13 +1027,8 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
+@@ -980,13 +1031,8 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
      mg_printf(nc, "HTTP/1.1 200 OK\r\n\r\n");
  
      /* Mark connection */
@@ -278,7 +290,7 @@ index d35ae6c..87b36af 100644
  
      mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
  }
-@@ -1001,7 +1043,7 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
+@@ -1001,7 +1047,7 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
  // xh :8433/cmd cmd==gain arg==10
  static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
  {
@@ -287,7 +299,7 @@ index d35ae6c..87b36af 100644
      char cmd[100], arg[100], val[100];
      rpc_t rpc = {
              .nc = nc,
-@@ -1036,7 +1078,7 @@ static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
+@@ -1036,7 +1082,7 @@ static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
  // http POST :8433/jsonrpc jsonrpc=2.0 method=sample_rate params:='[1024000]'
  static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
  {
@@ -296,7 +308,7 @@ index d35ae6c..87b36af 100644
  
      rpc_t rpc = {
              .nc       = nc,
-@@ -1052,8 +1094,8 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
+@@ -1052,8 +1098,8 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
          rpc_exec(&rpc, ctx->cfg);
      }
      else {
@@ -307,7 +319,7 @@ index d35ae6c..87b36af 100644
      }
  
      free(rpc.method);
-@@ -1064,7 +1106,7 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
+@@ -1064,7 +1110,7 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
  // Handles WS with JSON command
  static void handle_ws_rpc(struct mg_connection *nc, struct websocket_message *wm)
  {
@@ -316,7 +328,7 @@ index d35ae6c..87b36af 100644
  
      rpc_t rpc = {
              .nc       = nc,
-@@ -1096,28 +1138,61 @@ static void send_keep_alive(struct mg_connection *nc)
+@@ -1096,28 +1142,61 @@ static void send_keep_alive(struct mg_connection *nc)
          return; // this should not happen
      }
  
@@ -383,7 +395,7 @@ index d35ae6c..87b36af 100644
          /* New websocket connection. Send meta. */
          data_t *meta = meta_data(ctx->cfg);
          data_output_print(ctx->output, meta);
-@@ -1165,15 +1240,12 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
+@@ -1165,15 +1244,12 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
          }
  #ifdef SERVE_STATIC
          else {
@@ -400,7 +412,7 @@ index d35ae6c..87b36af 100644
      default:
          break;
      }
-@@ -1198,21 +1270,26 @@ static void http_broadcast_send(struct http_server_context *ctx, char const *msg
+@@ -1198,21 +1274,26 @@ static void http_broadcast_send(struct http_server_context *ctx, char const *msg
          free(ring_list_push(ctx->history, dup));
      }
  
@@ -431,7 +443,7 @@ index d35ae6c..87b36af 100644
              mg_send(nc, msg, len);
              mg_send(nc, "\r\n", 2);
              mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
-@@ -1271,6 +1348,14 @@ static struct http_server_context *http_server_start(struct mg_mgr *mgr, char co
+@@ -1271,6 +1352,14 @@ static struct http_server_context *http_server_start(struct mg_mgr *mgr, char co
  
  #define SHUTDOWN_JSON "{\"shutdown\":\"goodbye\"}"
  
@@ -446,7 +458,7 @@ index d35ae6c..87b36af 100644
  static int http_server_stop(struct http_server_context *ctx)
  {
      if (!ctx) {
-@@ -1279,28 +1364,38 @@ static int http_server_stop(struct http_server_context *ctx)
+@@ -1279,28 +1368,38 @@ static int http_server_stop(struct http_server_context *ctx)
  
      // close the server
      ctx->conn->user_data = NULL;
@@ -517,10 +529,10 @@ index dce0404..8413209 100644
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
 diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
-index 2a94dc5..ac5c22e 100644
+index 2a94dc5..1fe9da6 100644
 --- a/idf/rtl433_core/src/r_api.c
 +++ b/idf/rtl433_core/src/r_api.c
-@@ -84,6 +84,10 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
+@@ -84,20 +84,32 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
      cfg->frequencies = 1;
      cfg->frequency_index = 0;
      cfg->frequency[0] = center_freq;
@@ -531,8 +543,18 @@ index 2a94dc5..ac5c22e 100644
      // cfg->center_frequency = center_freq; // actually applied in the sdr event
      sdr_set_center_freq(cfg->dev, center_freq, 1);
  }
-@@ -94,10 +98,14 @@ void set_freq_correction(r_cfg_t *cfg, int freq_correction)
-     sdr_set_freq_correction(cfg->dev, freq_correction, 0);
+ 
+-void set_freq_correction(r_cfg_t *cfg, int freq_correction)
++int set_freq_correction(r_cfg_t *cfg, int freq_correction)
+ {
+-    // cfg->ppm_error = freq_correction; // actually applied in the sdr event
+-    sdr_set_freq_correction(cfg->dev, freq_correction, 0);
++    int r = sdr_set_freq_correction(cfg->dev, freq_correction, 0);
++    if (r >= 0) {
++        // what get_ppm_error reports, and what start_sdr() applies when the input restarts
++        cfg->ppm_error = freq_correction;
++    }
++    return r;
  }
  
 -void set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
@@ -548,7 +570,7 @@ index 2a94dc5..ac5c22e 100644
  }
  
  void set_gain_str(struct r_cfg *cfg, char const *gain_str)
-@@ -130,21 +138,22 @@ void r_init_cfg(r_cfg_t *cfg)
+@@ -130,21 +142,22 @@ void r_init_cfg(r_cfg_t *cfg)
      list_ensure_size(&cfg->output_handler, 16);
  
      // collect devices list, this should be a module
@@ -578,7 +600,7 @@ index 2a94dc5..ac5c22e 100644
  
      cfg->demod = calloc(1, sizeof(*cfg->demod));
      if (!cfg->demod)
-@@ -180,6 +189,13 @@ r_cfg_t *r_create_cfg(void)
+@@ -180,6 +193,13 @@ r_cfg_t *r_create_cfg(void)
      return cfg;
  }
  
@@ -592,7 +614,7 @@ index 2a94dc5..ac5c22e 100644
  void r_free_cfg(r_cfg_t *cfg)
  {
      if (cfg->dev) {
-@@ -217,12 +233,20 @@ void r_free_cfg(r_cfg_t *cfg)
+@@ -217,12 +237,20 @@ void r_free_cfg(r_cfg_t *cfg)
  
      list_free_elems(&cfg->in_files, NULL);
  
@@ -613,7 +635,7 @@ index 2a94dc5..ac5c22e 100644
      mg_mgr_free(cfg->mgr);
      free(cfg->mgr);
      cfg->mgr = NULL;
-@@ -591,6 +615,8 @@ void r_redirect_logging(r_cfg_t *cfg)
+@@ -591,6 +619,8 @@ void r_redirect_logging(r_cfg_t *cfg)
  /** Pass the data structure to all output handlers. Frees data afterwards. */
  void event_occurred_handler(r_cfg_t *cfg, data_t *data)
  {
@@ -622,7 +644,7 @@ index 2a94dc5..ac5c22e 100644
      // prepend "time" if requested
      if (cfg->report_time != REPORT_TIME_OFF) {
          char time_str[LOCAL_TIME_BUFLEN];
-@@ -629,9 +655,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
+@@ -629,9 +659,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
  }
  
  /** Pass the data structure to all output handlers. Frees data afterwards. */

@@ -92,10 +92,14 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
     sdr_set_center_freq(cfg->dev, center_freq, 1);
 }
 
-void set_freq_correction(r_cfg_t *cfg, int freq_correction)
+int set_freq_correction(r_cfg_t *cfg, int freq_correction)
 {
-    // cfg->ppm_error = freq_correction; // actually applied in the sdr event
-    sdr_set_freq_correction(cfg->dev, freq_correction, 0);
+    int r = sdr_set_freq_correction(cfg->dev, freq_correction, 0);
+    if (r >= 0) {
+        // what get_ppm_error reports, and what start_sdr() applies when the input restarts
+        cfg->ppm_error = freq_correction;
+    }
+    return r;
 }
 
 int set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
