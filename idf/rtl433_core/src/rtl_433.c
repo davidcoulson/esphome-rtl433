@@ -1331,6 +1331,10 @@ static int start_sdr(r_cfg_t *cfg)
     if (r < 0) {
         return -1; // exit(2);
     }
+    // A reopened device (a replug, a watchdog restart) often comes back at the same rate and frequency,
+    // so process_sdr_frame() sees no change and flushes nothing: start the filters, the pulse detector
+    // and the squelch from scratch rather than carry a half-seen pulse across the gap
+    reset_sdr_flow(cfg);
     cfg->dev_info = sdr_get_dev_info(cfg->dev);
     cfg->demod->sample_size = sdr_get_sample_size(cfg->dev);
     // cfg->demod->sample_signed = sdr_get_sample_signed(cfg->dev);
