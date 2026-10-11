@@ -72,7 +72,7 @@ index 241d2bd..c23e9a0 100644
  */
  void sdr_redirect_logging(void);
 diff --git a/idf/rtl433_core/src/http_server.c b/idf/rtl433_core/src/http_server.c
-index d35ae6c..588de49 100644
+index d35ae6c..87b36af 100644
 --- a/idf/rtl433_core/src/http_server.c
 +++ b/idf/rtl433_core/src/http_server.c
 @@ -411,17 +411,23 @@ static int json_parse(rpc_t *rpc, struct mg_str const *json)
@@ -219,12 +219,12 @@ index d35ae6c..588de49 100644
 +    NC_MODE_STREAM,   ///< /stream: every event as a raw line
 +};
 +
-+/// Per-connection state, set up on MG_EV_ACCEPT and freed on MG_EV_CLOSE.
++/// Per-connection state, set up on MG_EV_ACCEPT and freed on MG_EV_CLOSE (or when the server stops).
 +/// The listener's user_data is the server context and accepted connections inherit it from there,
 +/// so the listener (MG_F_LISTENING) never has one of these and must not be treated as having one.
  struct nc_context {
 -    int is_chunked;
-+    struct http_server_context *server; ///< NULL once the server is stopped
++    struct http_server_context *server; ///< the server that accepted this connection
 +    enum nc_mode mode;
  };
  
@@ -366,7 +366,7 @@ index d35ae6c..588de49 100644
 +        return;
 +    }
 +    if (!nc_server(nc)) {
-+        // server stopped (or the context allocation failed): no more requests on this connection
++        // the context allocation failed: no requests on this connection
 +        if (ev == MG_EV_HTTP_REQUEST || ev == MG_EV_WEBSOCKET_FRAME) {
 +            nc->flags |= MG_F_SEND_AND_CLOSE;
 +        }
@@ -431,7 +431,28 @@ index d35ae6c..588de49 100644
              mg_send(nc, msg, len);
              mg_send(nc, "\r\n", 2);
              mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
-@@ -1284,20 +1361,24 @@ static int http_server_stop(struct http_server_context *ctx)
+@@ -1271,6 +1348,14 @@ static struct http_server_context *http_server_start(struct mg_mgr *mgr, char co
+ 
+ #define SHUTDOWN_JSON "{\"shutdown\":\"goodbye\"}"
+ 
++// A stopped server's connections only flush what is queued (the goodbye) and close: nothing of ours runs
++static void stopped_handler(struct mg_connection *nc, int ev, void *ev_data)
++{
++    UNUSED(nc);
++    UNUSED(ev);
++    UNUSED(ev_data);
++}
++
+ static int http_server_stop(struct http_server_context *ctx)
+ {
+     if (!ctx) {
+@@ -1279,28 +1364,38 @@ static int http_server_stop(struct http_server_context *ctx)
+ 
+     // close the server
+     ctx->conn->user_data = NULL;
++    ctx->conn->handler   = stopped_handler;
+     ctx->conn->flags |= MG_F_CLOSE_IMMEDIATELY;
+ 
      // close connections with a goodbye
      struct mg_mgr *mgr = ctx->conn->mgr;
      for (struct mg_connection *nc = mg_next(mgr, NULL); nc != NULL; nc = mg_next(mgr, nc)) {
@@ -445,7 +466,6 @@ index d35ae6c..588de49 100644
 +        if (!cctx || cctx->server != ctx) {
 +            continue;
 +        }
-+        cctx->server = NULL; // ctx is freed below
          if (is_websocket(nc)) {
              mg_send_websocket_frame(nc, WEBSOCKET_OP_TEXT, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
          }
@@ -460,6 +480,15 @@ index d35ae6c..588de49 100644
              mg_send(nc, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
              mg_send(nc, "\r\n", 2);
          }
++        // ctx is freed below and the caller may free the rest before the next poll: close the connection
++        // once the goodbye is out, and let nothing of ours run on it again
++        nc->flags |= MG_F_SEND_AND_CLOSE;
++        nc->handler   = stopped_handler;
++        nc->user_data = NULL;
++        free(cctx);
+     }
+ 
+     for (void **iter = ring_list_iter(ctx->history); iter; iter = ring_list_next(ctx->history, iter))
 diff --git a/idf/rtl433_core/src/logger.c b/idf/rtl433_core/src/logger.c
 index dce0404..8413209 100644
 --- a/idf/rtl433_core/src/logger.c
@@ -488,7 +517,7 @@ index dce0404..8413209 100644
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
 diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
-index 2a94dc5..5e14ec2 100644
+index 2a94dc5..ac5c22e 100644
 --- a/idf/rtl433_core/src/r_api.c
 +++ b/idf/rtl433_core/src/r_api.c
 @@ -84,6 +84,10 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
@@ -549,7 +578,21 @@ index 2a94dc5..5e14ec2 100644
  
      cfg->demod = calloc(1, sizeof(*cfg->demod));
      if (!cfg->demod)
-@@ -217,6 +226,7 @@ void r_free_cfg(r_cfg_t *cfg)
+@@ -180,6 +189,13 @@ r_cfg_t *r_create_cfg(void)
+     return cfg;
+ }
+ 
++static void silenced_handler(struct mg_connection *nc, int ev, void *ev_data)
++{
++    (void)nc;
++    (void)ev;
++    (void)ev_data;
++}
++
+ void r_free_cfg(r_cfg_t *cfg)
+ {
+     if (cfg->dev) {
+@@ -217,12 +233,20 @@ void r_free_cfg(r_cfg_t *cfg)
  
      list_free_elems(&cfg->in_files, NULL);
  
@@ -557,7 +600,20 @@ index 2a94dc5..5e14ec2 100644
      free(cfg->demod);
      cfg->demod = NULL;
  
-@@ -591,6 +601,8 @@ void r_redirect_logging(r_cfg_t *cfg)
+     free(cfg->devices);
+     cfg->devices = NULL;
+ 
++    // mg_mgr_free() polls once more and then closes every connection through its handler, but the state
++    // those handlers use (outputs, the demod, cfg's timer) is freed by now: silence them first
++    if (cfg->mgr) {
++        for (struct mg_connection *nc = mg_next(cfg->mgr, NULL); nc != NULL; nc = mg_next(cfg->mgr, nc)) {
++            nc->handler = silenced_handler;
++        }
++    }
+     mg_mgr_free(cfg->mgr);
+     free(cfg->mgr);
+     cfg->mgr = NULL;
+@@ -591,6 +615,8 @@ void r_redirect_logging(r_cfg_t *cfg)
  /** Pass the data structure to all output handlers. Frees data afterwards. */
  void event_occurred_handler(r_cfg_t *cfg, data_t *data)
  {
@@ -566,7 +622,7 @@ index 2a94dc5..5e14ec2 100644
      // prepend "time" if requested
      if (cfg->report_time != REPORT_TIME_OFF) {
          char time_str[LOCAL_TIME_BUFLEN];
-@@ -629,9 +641,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
+@@ -629,9 +655,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
  }
  
  /** Pass the data structure to all output handlers. Frees data afterwards. */
