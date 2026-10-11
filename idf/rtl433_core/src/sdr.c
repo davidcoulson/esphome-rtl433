@@ -1173,12 +1173,13 @@ int rtl433_port_usb_stats(struct rtl433_usb_stats *out)
     return ok;
 }
 
-static sdr_dev_t *volatile esp_event_dev = NULL; // the open dev the driver's events refer to, if any
+// Counts the driver's disconnect events. The callback runs on the driver's USB task, which must not touch an
+// sdr_dev_t: the main task can close (free) it at any moment. The read loop compares this instead.
+static volatile uint32_t esp_disconnects = 0;
 
 static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, void *ctx)
 {
     UNUSED(ctx);
-    sdr_dev_t *dev = esp_event_dev;
     switch (event) {
     case ESP_RTL_SDR_EVT_ENUMERATED: {
         esp_rtl_sdr_device_info_t const *info = payload;
@@ -1188,9 +1189,8 @@ static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, voi
         break;
     }
     case ESP_RTL_SDR_EVT_DISCONNECTED:
+        esp_disconnects++; // first: the log below may block
         print_log(LOG_ERROR, "SDR", "USB SDR disconnected");
-        if (dev)
-            dev->esp_streaming = 0;
         break;
     case ESP_RTL_SDR_EVT_ERROR: {
         esp_rtl_sdr_error_info_t const *err = payload;
@@ -1268,7 +1268,6 @@ static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
     dev->esp_biastee = -1;
     dev->esp_digital_agc = -1;
     dev->esp_dev = esp_handle;
-    esp_event_dev = dev;
     esp_err_t err;
 
     // "esp:SERIAL" picks one dongle when several share a hub
@@ -1369,6 +1368,7 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
     // ring, and a hop retunes while the previous block is being decoded, so the next block starts by
     // dropping them, and a block that a change landed in the middle of is dropped whole. That costs about
     // one block per hop, which used to be decoded at the new band's rate with its decoders anyway.
+    uint32_t seen_disconnects = esp_disconnects; // one after this: NOT_STREAMING means unplugged, give up
     uint32_t seen_gen;
 #ifdef THREADS
     pthread_mutex_lock(&dev->lock);
@@ -1414,12 +1414,13 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
             if (err == ESP_OK) {
                 n_read += got;
             }
-            else if (err == ESP_RTL_SDR_ERR_NOT_STREAMING && dev->esp_streaming) {
+            else if (err == ESP_RTL_SDR_ERR_NOT_STREAMING && dev->esp_streaming && esp_disconnects == seen_disconnects) {
                 vTaskDelay(pdMS_TO_TICKS(10)); // a rate change is restarting the stream
             }
             else if (err != ESP_RTL_SDR_ERR_TIMEOUT && err != ESP_ERR_TIMEOUT) {
                 // Unplugged or faulted. Stop delivering; rtl_433's stall watchdog restarts the input.
                 print_logf(LOG_WARNING, "SDR", "USB read failed: %s", esp_rtl_sdr_err_to_name(err));
+                dev->esp_streaming = 0; // (the disconnect callback used to clear this, racing sdr_close)
                 dev->running = 0;
                 break;
             }
@@ -1479,7 +1480,6 @@ void sdr_abort(sdr_dev_t *dev)
         if (esp_active == dev->esp_dev)
             esp_active = NULL;
         pthread_mutex_unlock(&esp_active_lock);
-        esp_event_dev = NULL;
         esp_rtl_sdr_stop(dev->esp_dev, 0); // a pending read returns NOT_STREAMING and the reader ends
         dev->esp_streaming = 0;
     }
@@ -1544,7 +1544,6 @@ int sdr_close(sdr_dev_t *dev)
         if (esp_active == dev->esp_dev)
             esp_active = NULL;
         pthread_mutex_unlock(&esp_active_lock);
-        esp_event_dev = NULL;
         esp_rtl_sdr_stop(dev->esp_dev, 0);
         dev->esp_streaming = 0;
         ret = 0; // the driver stays installed (see esp_handle)
