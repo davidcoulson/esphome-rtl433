@@ -1990,7 +1990,7 @@ int main(int argc, char **argv) {
     while (!cfg->exit_async) {
         mg_mgr_poll(cfg->mgr, 500);
 #ifdef ESP_RTL_SDR
-        rtl433_port_main_tick(); // health figures the ESPHome component reads
+        rtl433_port_main_tick(cfg); // health figures for the ESPHome component, deferred band changes
 #endif
     }
     if (cfg->verbosity >= LOG_INFO) {

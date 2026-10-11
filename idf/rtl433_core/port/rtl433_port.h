@@ -45,7 +45,8 @@ extern volatile unsigned rtl433_port_acquire_stack_free;
 /* The same for the decoding (main) task, refreshed from its main loop by rtl433_port_main_tick(): the
    component never queries the task's handle, which is gone once rtl_433 has exited. */
 extern volatile unsigned rtl433_port_decode_stack_free;
-void rtl433_port_main_tick(void);
+struct r_cfg;
+void rtl433_port_main_tick(struct r_cfg *cfg);
 void rtl433_port_wdt_subscribe(void);
 void rtl433_port_wdt_feed(void);
 void rtl433_port_wdt_unsubscribe(void); /* a subscribed task must call this before it exits */
@@ -58,6 +59,10 @@ struct r_cfg;
 void rtl433_port_set_band_decoders(int band, char const *list);
 void rtl433_port_apply_band(struct r_cfg *cfg);
 void rtl433_port_manual_tune(struct r_cfg *cfg);
+void rtl433_port_bands_poll(struct r_cfg *cfg);  // the main task applies a manual tune made elsewhere
+
+// remote_control: false (set by the ESPHome component): refuse anything that changes the receiver
+extern volatile int rtl433_port_http_read_only;
 
 // lwIP's netdb has getaddrinfo()/getnameinfo() but not these
 const char *gai_strerror(int ecode);

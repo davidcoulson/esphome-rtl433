@@ -40,7 +40,8 @@ void *rtl433_port_acquire_task_handle(void) { return acquire_task; }
 volatile unsigned rtl433_port_decode_stack_free = 0;
 
 // From rtl_433's main loop, at least every 500 ms (mg_mgr_poll's timeout)
-void rtl433_port_main_tick(void) {
+void rtl433_port_main_tick(struct r_cfg *cfg) {
+  rtl433_port_bands_poll(cfg);
   static TickType_t last_hwm = 0;
   TickType_t now = xTaskGetTickCount();
   if (last_hwm == 0 || now - last_hwm > pdMS_TO_TICKS(1000)) {

@@ -168,6 +168,11 @@ E.g. initialization from Gqrx:
 static int parse_command(r_cfg_t *cfg, int control, uint8_t const *buf, int len)
 {
     UNUSED(cfg);
+#ifdef ESP_RTL_SDR
+    if (rtl433_port_http_read_only) {
+        control = 0; // remote_control: false covers rtl_tcp clients too, not only the HTTP API
+    }
+#endif
 
     if (len < 5)
         return 0;

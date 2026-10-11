@@ -528,6 +528,22 @@ index dce0404..8413209 100644
  }
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
+diff --git a/idf/rtl433_core/src/output_rtltcp.c b/idf/rtl433_core/src/output_rtltcp.c
+index 5bbd5ec..6d0cb2d 100644
+--- a/idf/rtl433_core/src/output_rtltcp.c
++++ b/idf/rtl433_core/src/output_rtltcp.c
+@@ -168,6 +168,11 @@ E.g. initialization from Gqrx:
+ static int parse_command(r_cfg_t *cfg, int control, uint8_t const *buf, int len)
+ {
+     UNUSED(cfg);
++#ifdef ESP_RTL_SDR
++    if (rtl433_port_http_read_only) {
++        control = 0; // remote_control: false covers rtl_tcp clients too, not only the HTTP API
++    }
++#endif
+ 
+     if (len < 5)
+         return 0;
 diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
 index 2a94dc5..1fe9da6 100644
 --- a/idf/rtl433_core/src/r_api.c
@@ -879,7 +895,7 @@ index cafd63c..75ecfb4 100644
      return buf;
  }
 diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
-index c8bb91d..f8a808b 100644
+index c8bb91d..adad155 100644
 --- a/idf/rtl433_core/src/rtl_433.c
 +++ b/idf/rtl433_core/src/rtl_433.c
 @@ -29,6 +29,9 @@
@@ -1054,7 +1070,7 @@ index c8bb91d..f8a808b 100644
      while (!cfg->exit_async) {
          mg_mgr_poll(cfg->mgr, 500);
 +#ifdef ESP_RTL_SDR
-+        rtl433_port_main_tick(); // health figures the ESPHome component reads
++        rtl433_port_main_tick(cfg); // health figures for the ESPHome component, deferred band changes
 +#endif
      }
      if (cfg->verbosity >= LOG_INFO) {
