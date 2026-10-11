@@ -1462,6 +1462,29 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
     return 0;
 }
 
+void sdr_abort(sdr_dev_t *dev)
+{
+    if (!dev)
+        return;
+#ifdef THREADS
+    pthread_mutex_lock(&dev->lock);
+    dev->exit_acquire = 1;
+#endif
+    dev->running = 0;
+#ifdef THREADS
+    pthread_mutex_unlock(&dev->lock);
+#endif
+    if (dev->esp_dev) {
+        pthread_mutex_lock(&esp_active_lock);
+        if (esp_active == dev->esp_dev)
+            esp_active = NULL;
+        pthread_mutex_unlock(&esp_active_lock);
+        esp_event_dev = NULL;
+        esp_rtl_sdr_stop(dev->esp_dev, 0); // a pending read returns NOT_STREAMING and the reader ends
+        dev->esp_streaming = 0;
+    }
+}
+
 #endif /* ESP_RTL_SDR */
 
 /* Public API */

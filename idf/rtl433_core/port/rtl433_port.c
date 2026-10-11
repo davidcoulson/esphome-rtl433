@@ -48,6 +48,9 @@ void rtl433_port_log(int level, char const *src, char const *msg) {
     ESP_LOGI(TAG, "%s: %s", src, msg);
 }
 
+static void (*exit_hook)(void) = NULL;
+void rtl433_port_set_exit_hook(void (*hook)(void)) { exit_hook = hook; }
+
 void rtl433_port_exit(int code) {
   rtl433_port_exit_code = code;
   ESP_LOGE(TAG, "rtl_433 exited with code %d", code);
@@ -56,6 +59,11 @@ void rtl433_port_exit(int code) {
   if (!rtl433_port_on_main_task()) {
     // From the acquire pthread: leave it joinable, otherwise sdr_stop()'s pthread_join() hangs the main task
     pthread_exit(NULL);
+  }
+  static int exiting = 0;
+  if (exit_hook != NULL && !exiting) {
+    exiting = 1;  // an exit() from inside the hook just ends the task
+    exit_hook();
   }
   vTaskDelete(NULL);
   for (;;) {

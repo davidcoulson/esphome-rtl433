@@ -11,6 +11,8 @@ extern "C" {
 // rtl_433 calls exit() on fatal errors. On a microcontroller that would reboot the chip, so it ends
 // the rtl_433 task instead; the ESPHome component notices and reports the failure.
 void rtl433_port_exit(int code) __attribute__((noreturn));
+// Run once by an exit() on the main task before the task ends (rtl_433.c stops the input with it)
+void rtl433_port_set_exit_hook(void (*hook)(void));
 
 // Every rtl_433 log line (see src/logger.c); the ESPHome component installs the sink
 typedef void (*rtl433_port_log_sink_t)(int level, char const *src, char const *msg);

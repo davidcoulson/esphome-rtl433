@@ -1469,6 +1469,24 @@ static void timer_handler(struct mg_connection *nc, int ev, void *ev_data)
     }
 }
 
+#ifdef ESP_RTL_SDR
+/* exit() on this task (port/rtl433_port.c) deletes it without returning from main(): stop the input
+   first, or USB keeps streaming and the acquire thread keeps running. Not sdr_stop(): its join hangs
+   when the acquire thread is in mg_broadcast() waiting for this task to take its block, which is where
+   an exit() from a decoder leaves it. So answer that wait the way mg_mgr_poll() would, and let the
+   thread end by itself. */
+static void esp_exit_cleanup(void)
+{
+    r_cfg_t *cfg = &g_cfg;
+    if (cfg->dev) {
+        sdr_abort(cfg->dev);
+    }
+    if (cfg->mgr && cfg->mgr->ctl[1] != INVALID_SOCKET) {
+        (void)send(cfg->mgr->ctl[1], "", 1, 0); // the 1-byte reply mg_broadcast() waits for
+    }
+}
+#endif
+
 int main(int argc, char **argv) {
     int r = 0;
     struct dm_state *demod;
@@ -1478,6 +1496,9 @@ int main(int argc, char **argv) {
     sdr_redirect_logging();
 
     r_init_cfg(cfg);
+#ifdef ESP_RTL_SDR
+    rtl433_port_set_exit_hook(esp_exit_cleanup);
+#endif
 
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
