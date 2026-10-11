@@ -104,6 +104,13 @@ void reset_sdr_flow(r_cfg_t *cfg)
     baseband_demod_FM_reset(&demod->demod_FM_state);
 
     pulse_detect_reset(demod->pulse_detect);
+#ifdef ESP_PLATFORM
+    // the squelch look-behind block (ESP port) belongs to the input before the reset
+    demod->squelch_prev_len    = 0;
+    demod->squelch_prev_active = 0;
+    demod->squelch_prev_done   = 0;
+    demod->squelch_force       = 0;
+#endif
 }
 
 /**

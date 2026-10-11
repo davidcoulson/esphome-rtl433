@@ -429,6 +429,9 @@ async def to_code(config):
         cg.add_define("USE_RTL433_CPU_LOAD")
     if config[CONF_LOG_TASK_STATS]:
         add_idf_sdkconfig_option("CONFIG_FREERTOS_USE_TRACE_FACILITY", True)
+        # puts each task's core in the uxTaskGetSystemState() snapshot (rather than asking a handle that may be gone)
+        add_idf_sdkconfig_option("CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS", True)
+        add_idf_sdkconfig_option("CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID", True)
         cg.add_define("USE_RTL433_TASK_STATS")
     # Decoder sets go straight to the port layer rather than as -R, so they can change on each hop
     default = config.get(CONF_DECODERS)

@@ -730,8 +730,12 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
         rpc->response(rpc, 0, "Ok", 0);
     }
     else if (!strcmp(rpc->method, "ppm_error")) {
-        set_freq_correction(cfg, rpc->val);
-        rpc->response(rpc, 0, "Ok", 0);
+        if (set_freq_correction(cfg, rpc->val) < 0) {
+            rpc->response(rpc, -1, "Frequency correction not set", 0); // failed, or no device open
+        }
+        else {
+            rpc->response(rpc, 0, "Ok", 0);
+        }
     }
     else if (!strcmp(rpc->method, "sample_rate")) {
         if (set_sample_rate(cfg, rpc->val) < 0) {
@@ -767,11 +771,11 @@ enum nc_mode {
     NC_MODE_STREAM,   ///< /stream: every event as a raw line
 };
 
-/// Per-connection state, set up on MG_EV_ACCEPT and freed on MG_EV_CLOSE.
+/// Per-connection state, set up on MG_EV_ACCEPT and freed on MG_EV_CLOSE (or when the server stops).
 /// The listener's user_data is the server context and accepted connections inherit it from there,
 /// so the listener (MG_F_LISTENING) never has one of these and must not be treated as having one.
 struct nc_context {
-    struct http_server_context *server; ///< NULL once the server is stopped
+    struct http_server_context *server; ///< the server that accepted this connection
     enum nc_mode mode;
 };
 
@@ -1180,7 +1184,7 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
         return;
     }
     if (!nc_server(nc)) {
-        // server stopped (or the context allocation failed): no more requests on this connection
+        // the context allocation failed: no requests on this connection
         if (ev == MG_EV_HTTP_REQUEST || ev == MG_EV_WEBSOCKET_FRAME) {
             nc->flags |= MG_F_SEND_AND_CLOSE;
         }
@@ -1348,6 +1352,14 @@ static struct http_server_context *http_server_start(struct mg_mgr *mgr, char co
 
 #define SHUTDOWN_JSON "{\"shutdown\":\"goodbye\"}"
 
+// A stopped server's connections only flush what is queued (the goodbye) and close: nothing of ours runs
+static void stopped_handler(struct mg_connection *nc, int ev, void *ev_data)
+{
+    UNUSED(nc);
+    UNUSED(ev);
+    UNUSED(ev_data);
+}
+
 static int http_server_stop(struct http_server_context *ctx)
 {
     if (!ctx) {
@@ -1356,6 +1368,7 @@ static int http_server_stop(struct http_server_context *ctx)
 
     // close the server
     ctx->conn->user_data = NULL;
+    ctx->conn->handler   = stopped_handler;
     ctx->conn->flags |= MG_F_CLOSE_IMMEDIATELY;
 
     // close connections with a goodbye
@@ -1369,7 +1382,6 @@ static int http_server_stop(struct http_server_context *ctx)
         if (!cctx || cctx->server != ctx) {
             continue;
         }
-        cctx->server = NULL; // ctx is freed below
         if (is_websocket(nc)) {
             mg_send_websocket_frame(nc, WEBSOCKET_OP_TEXT, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
         }
@@ -1382,6 +1394,12 @@ static int http_server_stop(struct http_server_context *ctx)
             mg_send(nc, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
             mg_send(nc, "\r\n", 2);
         }
+        // ctx is freed below and the caller may free the rest before the next poll: close the connection
+        // once the goodbye is out, and let nothing of ours run on it again
+        nc->flags |= MG_F_SEND_AND_CLOSE;
+        nc->handler   = stopped_handler;
+        nc->user_data = NULL;
+        free(cctx);
     }
 
     for (void **iter = ring_list_iter(ctx->history); iter; iter = ring_list_next(ctx->history, iter))

@@ -114,15 +114,18 @@ void Rtl433Component::task_entry(void *arg) {
 }
 
 void Rtl433Component::update() {
-  // rtl_433 ending (any exit()) or its task being gone means nothing is decoding; say so
-  if (this->task_ != nullptr && !this->stopped_ &&
-      (rtl433_port_exit_code >= 0 || eTaskGetState(this->task_) == eDeleted)) {
+  // rtl_433 ending means nothing is decoding; say so. Every way out (an exit(), or main returning in
+  // task_entry) sets the exit code before the task deletes itself, so the handle is never needed, and
+  // querying it after the task is gone would be a use-after-free.
+  if (this->task_ != nullptr && !this->stopped_ && rtl433_port_exit_code >= 0) {
     this->stopped_ = true;
     this->status_set_error(LOG_STR("rtl_433 stopped"));
     ESP_LOGE(TAG, "rtl_433 is no longer running (exit code %d); reboot to recover", rtl433_port_exit_code);
   }
   rtl433_usb_stats stats{};
+  bool streaming = false;
   if (!this->stopped_ && rtl433_port_usb_stats(&stats)) {
+    streaming = stats.effective_sps > 0;
     // The driver's counters restart with every stream start (each rate-change hop): accumulate the deltas
     this->overruns_total_ += stats.overruns >= this->last_overruns_ ? stats.overruns - this->last_overruns_ : stats.overruns;
     // consumer_drops is bytes the driver dropped from its ring because rtl_433 read too slowly (plus 1 for each
@@ -140,6 +143,8 @@ void Rtl433Component::update() {
              static_cast<unsigned>(stats.sample_rate), stats.frequency / 1e6, static_cast<unsigned>(stats.overruns),
              static_cast<unsigned>(stats.consumer_drops));
   }
+  if (!this->stopped_)
+    this->check_liveness_(streaming);
   if (this->decoded_events_sensor_ != nullptr)
     this->decoded_events_sensor_->publish_state(rtl433_port_events & 0xFFFFFF);  // exact in a float
   this->publish_health_();
@@ -147,12 +152,46 @@ void Rtl433Component::update() {
   this->publish_cpu_load_();
 }
 
+void Rtl433Component::check_liveness_(bool streaming) {
+  // rtl_433's main loop passes at least twice a second, and while the USB stream delivers samples the
+  // demodulator takes frames. Either stopping for this long means it is hung, not just busy.
+  static constexpr uint32_t STALL_MS = 30000;
+  uint32_t now = millis();
+  uint32_t loops = rtl433_port_main_loops, frames = rtl433_port_frames;
+  if (loops != this->last_loops_ || loops == 0) {  // 0: the loop has not started (start-up, dongle wait)
+    this->last_loops_ = loops;
+    this->last_loops_ms_ = now;
+  }
+  if (frames != this->last_frames_ || !streaming) {  // no stream (no dongle, restarting): nothing to take
+    this->last_frames_ = frames;
+    this->last_frames_ms_ = now;
+  }
+  bool loop_stalled = now - this->last_loops_ms_ > STALL_MS;
+  bool frames_stalled = now - this->last_frames_ms_ > STALL_MS;
+  if ((loop_stalled || frames_stalled) && !this->stalled_) {
+    this->stalled_ = true;
+    if (loop_stalled) {
+      this->status_set_error(LOG_STR("rtl_433 main loop stalled"));
+      ESP_LOGE(TAG, "rtl_433's main loop has not run for %us", static_cast<unsigned>((now - this->last_loops_ms_) / 1000));
+    } else {
+      this->status_set_error(LOG_STR("rtl_433 takes no samples"));
+      ESP_LOGE(TAG, "The USB stream runs but rtl_433 has taken no samples for %us",
+               static_cast<unsigned>((now - this->last_frames_ms_) / 1000));
+    }
+  } else if (!loop_stalled && !frames_stalled && this->stalled_) {
+    this->stalled_ = false;
+    this->status_clear_error();
+    ESP_LOGI(TAG, "rtl_433 is running again");
+  }
+}
+
 void Rtl433Component::publish_health_() {
-  // ESP-IDF's high-water marks are in bytes: the least free stack each task has ever had
-  if (this->decode_stack_free_sensor_ != nullptr && this->task_ != nullptr && !this->stopped_)
-    this->decode_stack_free_sensor_->publish_state(uxTaskGetStackHighWaterMark(this->task_));
-  // The acquire thread reports its own mark: it is recreated on every input restart (dongle replug),
-  // and querying a handle that has just been freed is a load fault (seen on a Blog V3 replug).
+  // ESP-IDF's high-water marks are in bytes: the least free stack each task has ever had. Both tasks
+  // report their own mark: the acquire thread is recreated on every input restart (dongle replug) and the
+  // decoding task is gone once rtl_433 exits, and querying a handle that has been freed is a load fault
+  // (seen on a Blog V3 replug).
+  if (this->decode_stack_free_sensor_ != nullptr && rtl433_port_decode_stack_free != 0 && !this->stopped_)
+    this->decode_stack_free_sensor_->publish_state(rtl433_port_decode_stack_free);
   if (this->acquire_stack_free_sensor_ != nullptr && rtl433_port_acquire_stack_free != 0 && !this->stopped_)
     this->acquire_stack_free_sensor_->publish_state(rtl433_port_acquire_stack_free);
   if (this->heap_free_sensor_ != nullptr)
@@ -169,22 +208,43 @@ void Rtl433Component::log_task_stats_() {
   UBaseType_t n = uxTaskGetNumberOfTasks();
   std::vector<TaskStatus_t> st(n + 4);
   n = uxTaskGetSystemState(st.data(), st.size(), nullptr);
+  // The snapshot's pcTaskName points into each task's TCB, which a task deleted from now on frees (an
+  // acquire thread is joined and deleted on every replug). Copy the names right away, and take the core
+  // from the snapshot itself: never touch a snapshot handle except as a key.
+  struct Row {
+    TaskHandle_t handle;
+    uint32_t runtime;
+    unsigned prio;
+    int core;
+    char name[configMAX_TASK_NAME_LEN];
+  };
+  std::vector<Row> rows(n);
+  for (UBaseType_t i = 0; i < n; i++) {
+    rows[i].handle = st[i].xHandle;
+    rows[i].runtime = st[i].ulRunTimeCounter;
+    rows[i].prio = st[i].uxCurrentPriority;
+#if configTASKLIST_INCLUDE_COREID
+    rows[i].core = static_cast<int>(st[i].xCoreID);
+#else
+    rows[i].core = -2;  // not in the snapshot
+#endif
+    strncpy(rows[i].name, st[i].pcTaskName != nullptr ? st[i].pcTaskName : "?", sizeof(rows[i].name) - 1);
+    rows[i].name[sizeof(rows[i].name) - 1] = '\0';
+  }
   int64_t now = esp_timer_get_time();
   int64_t wall = now - last_us;
   std::vector<std::pair<TaskHandle_t, uint32_t>> cur;
-  for (UBaseType_t i = 0; i < n; i++) {
-    cur.emplace_back(st[i].xHandle, st[i].ulRunTimeCounter);
+  for (auto &row : rows) {
+    cur.emplace_back(row.handle, row.runtime);
     if (last_us == 0 || wall <= 0)
       continue;
     uint32_t prev = 0;
     for (auto &p : last)
-      if (p.first == st[i].xHandle)
+      if (p.first == row.handle)
         prev = p.second;
-    float pct = 100.0f * static_cast<float>(st[i].ulRunTimeCounter - prev) / static_cast<float>(wall);
+    float pct = 100.0f * static_cast<float>(row.runtime - prev) / static_cast<float>(wall);
     if (pct >= 1.0f)
-      ESP_LOGD(TAG, "task %-16s core %2d prio %2u  %5.1f%% of one core", st[i].pcTaskName,
-               static_cast<int>(xTaskGetCoreID(st[i].xHandle)), static_cast<unsigned>(st[i].uxCurrentPriority),
-               pct);
+      ESP_LOGD(TAG, "task %-16s core %2d prio %2u  %5.1f%% of one core", row.name, row.core, row.prio, pct);
   }
   last = std::move(cur);
   last_us = now;

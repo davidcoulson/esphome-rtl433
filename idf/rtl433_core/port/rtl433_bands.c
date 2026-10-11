@@ -100,9 +100,18 @@ static void update_fm_demod(r_cfg_t *cfg) {
 
 // A frequency set from Home Assistant (/cmd center_frequency) ends hopping, and it may not be any of the
 // configured bands: run every band's decoders (or the defaults, if some band uses the defaults).
+static volatile int manual_tune_pending = 0;
+
 void rtl433_port_manual_tune(r_cfg_t *cfg) {
   if (!bands_configured)
     return;
+  if (!rtl433_port_on_main_task()) {
+    // From rtl_tcp's control thread (output_rtltcp.c): the main task is decoding with the registered
+    // decoders right now, so it swaps the set itself, on its next loop (rtl433_port_bands_poll())
+    manual_tune_pending = 1;
+    return;
+  }
+  manual_tune_pending = 0;
   applied_band = -2;
   unregister_all(cfg);
   for (int i = 0; i < MAX_FREQS; i++) {
@@ -118,6 +127,11 @@ void rtl433_port_manual_tune(r_cfg_t *cfg) {
   }
   update_fm_demod(cfg);
   print_log(LOG_NOTICE, "Decoders", "Manual frequency: every band's decoders");
+}
+
+void rtl433_port_bands_poll(r_cfg_t *cfg) {
+  if (manual_tune_pending)
+    rtl433_port_manual_tune(cfg);
 }
 
 void rtl433_port_apply_band(r_cfg_t *cfg) {
