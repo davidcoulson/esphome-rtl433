@@ -1144,6 +1144,8 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
 #define ESP_SDR_DEFAULT_RATE 250000u
 #define ESP_SDR_ATTACH_WAIT_MS 15000
 #define ESP_SDR_READ_TIMEOUT_MS 500
+#define ESP_SDR_NOT_STREAMING_MAX_MS 5000 // longer than the stop/start a rate change does
+#define ESP_SDR_START_BACKOFF_MAX_MS 30000
 
 // The open handle, for the ESPHome component's diagnostics; guarded against a concurrent close
 static pthread_mutex_t esp_active_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1176,6 +1178,10 @@ int rtl433_port_usb_stats(struct rtl433_usb_stats *out)
 // Counts the driver's disconnect events. The callback runs on the driver's USB task, which must not touch an
 // sdr_dev_t: the main task can close (free) it at any moment. The read loop compares this instead.
 static volatile uint32_t esp_disconnects = 0;
+// Counts the driver's EVT_ERROR events, for the same reason. The driver sends one when the stream dies
+// (FAULT), when an unplugged dongle cannot be closed yet, or when a retune failed and it kept the previous
+// frequency (the samples are then not where rtl_433 decodes). The read loop restarts the input on a change.
+static volatile uint32_t esp_errors = 0;
 
 static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, void *ctx)
 {
@@ -1193,6 +1199,7 @@ static void esp_sdr_event_cb(esp_rtl_sdr_event_t event, const void *payload, voi
         print_log(LOG_ERROR, "SDR", "USB SDR disconnected");
         break;
     case ESP_RTL_SDR_EVT_ERROR: {
+        esp_errors++; // first: the log below may block
         esp_rtl_sdr_error_info_t const *err = payload;
         if (err)
             print_logf(LOG_WARNING, "SDR", "esp_rtl_sdr: %s %s", esp_rtl_sdr_err_to_name(err->code), err->message);
@@ -1310,6 +1317,13 @@ static void esp_sdr_apply_gain(sdr_dev_t *dev)
         print_logf(LOG_WARNING, "SDR", "Setting tuner gain failed: %s", esp_rtl_sdr_err_to_name(err));
 }
 
+// Consecutive stream start failures back off (1 s, 2 s, 4 s ... 30 s) so a dongle that keeps failing is not
+// hammered with a full init sequence on every watchdog restart (the gate is in esp_sdr_read_loop; a rate
+// change's own restart and its fall-back are not throttled). Kept across sdr_open(): the dev is per open,
+// the dongle is not. Any successful start clears it.
+static unsigned esp_start_failures = 0;
+static TickType_t esp_start_not_before = 0;
+
 static int esp_sdr_start_stream(sdr_dev_t *dev)
 {
     uint32_t freq = dev->esp_freq ? dev->esp_freq : ESP_SDR_DEFAULT_FREQ;
@@ -1317,12 +1331,30 @@ static int esp_sdr_start_stream(sdr_dev_t *dev)
     if (dev->esp_ppm)
         esp_rtl_sdr_set_freq_correction(dev->esp_dev, dev->esp_ppm);
     esp_err_t err = esp_rtl_sdr_start_hz(dev->esp_dev, freq, rate);
+    if (err == ESP_RTL_SDR_ERR_FAULT) {
+        // A failed start (one USB error in the init table) or a dead stream leaves the driver in FAULT, and
+        // start() refuses until stop() or reset() clears it. stop() drains and releases what is left, then
+        // reset() clears FAULT; it refuses (ERR_BUSY) while transfers are still live, and the backoff below
+        // gives them time.
+        print_log(LOG_WARNING, "SDR", "USB SDR driver in FAULT; resetting it");
+        esp_rtl_sdr_stop(dev->esp_dev, 0);
+        esp_err_t rerr = esp_rtl_sdr_reset(dev->esp_dev);
+        if (rerr != ESP_OK && esp_rtl_sdr_get_state(dev->esp_dev) != ESP_RTL_SDR_STATE_IDLE)
+            print_logf(LOG_WARNING, "SDR", "USB SDR reset failed: %s", esp_rtl_sdr_err_to_name(rerr));
+        err = esp_rtl_sdr_start_hz(dev->esp_dev, freq, rate);
+    }
     if (err != ESP_OK) {
-        print_logf(LOG_ERROR, "SDR", "Starting the USB stream at %u Hz, %u S/s failed: %s",
-                freq, rate, esp_rtl_sdr_err_to_name(err));
+        unsigned backoff_ms = 1000u << (esp_start_failures < 5 ? esp_start_failures : 5);
+        if (backoff_ms > ESP_SDR_START_BACKOFF_MAX_MS)
+            backoff_ms = ESP_SDR_START_BACKOFF_MAX_MS;
+        esp_start_failures++;
+        esp_start_not_before = xTaskGetTickCount() + pdMS_TO_TICKS(backoff_ms);
+        print_logf(LOG_ERROR, "SDR", "Starting the USB stream at %u Hz, %u S/s failed: %s (attempt %u, next in %u s)",
+                freq, rate, esp_rtl_sdr_err_to_name(err), esp_start_failures, backoff_ms / 1000u);
         dev->esp_streaming = 0; // the reader gives up instead of spinning on NOT_STREAMING
         return -1;
     }
+    esp_start_failures = 0;
     dev->esp_streaming = 1;
     esp_sdr_apply_gain(dev);
     // Like gain, these need the claimed interface
@@ -1360,8 +1392,12 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
         dev->buffer_pos = 0;
     }
 
-    if (!dev->esp_streaming && esp_sdr_start_stream(dev) < 0)
-        return -1;
+    if (!dev->esp_streaming) {
+        if (esp_start_failures && (int32_t)(xTaskGetTickCount() - esp_start_not_before) < 0)
+            return -1; // still backing off; the stall watchdog calls again
+        if (esp_sdr_start_stream(dev) < 0)
+            return -1;
+    }
 
     // Every block is labelled with the settings it was captured with. A retune or rate change (main task)
     // bumps esp_tune_gen once it has taken effect; samples captured before it can still be in the driver's
@@ -1369,6 +1405,7 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
     // dropping them, and a block that a change landed in the middle of is dropped whole. That costs about
     // one block per hop, which used to be decoded at the new band's rate with its decoders anyway.
     uint32_t seen_disconnects = esp_disconnects; // one after this: NOT_STREAMING means unplugged, give up
+    uint32_t seen_errors = esp_errors;           // one after this: the driver reported a dead or mistuned stream
     uint32_t seen_gen;
 #ifdef THREADS
     pthread_mutex_lock(&dev->lock);
@@ -1400,6 +1437,7 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
 
         size_t n_read = 0;
         int exit_acquire = 0;
+        int not_streaming_ms = 0;
         while (n_read < buf_len) {
 #ifdef THREADS
             pthread_mutex_lock(&dev->lock);
@@ -1408,14 +1446,25 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
 #endif
             if (exit_acquire || !dev->running)
                 break;
+            if (esp_errors != seen_errors) {
+                // Stop delivering; rtl_433's stall watchdog restarts the input with a full start at the
+                // requested frequency and rate.
+                print_log(LOG_WARNING, "SDR", "USB SDR reported an error; restarting the input");
+                dev->esp_streaming = 0;
+                dev->running = 0;
+                break;
+            }
             size_t got = 0;
             esp_err_t err = esp_rtl_sdr_read(dev->esp_dev, &buffer[n_read], buf_len - n_read,
                     ESP_SDR_READ_TIMEOUT_MS, &got);
             if (err == ESP_OK) {
                 n_read += got;
+                not_streaming_ms = 0;
             }
-            else if (err == ESP_RTL_SDR_ERR_NOT_STREAMING && dev->esp_streaming && esp_disconnects == seen_disconnects) {
+            else if (err == ESP_RTL_SDR_ERR_NOT_STREAMING && dev->esp_streaming && esp_disconnects == seen_disconnects
+                    && not_streaming_ms < ESP_SDR_NOT_STREAMING_MAX_MS) {
                 vTaskDelay(pdMS_TO_TICKS(10)); // a rate change is restarting the stream
+                not_streaming_ms += 10;
             }
             else if (err != ESP_RTL_SDR_ERR_TIMEOUT && err != ESP_ERR_TIMEOUT) {
                 // Unplugged or faulted. Stop delivering; rtl_433's stall watchdog restarts the input.
