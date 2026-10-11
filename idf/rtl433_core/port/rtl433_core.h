@@ -22,6 +22,7 @@ extern volatile int rtl433_port_http_read_only;  // refuse every /cmd method exc
 void *rtl433_port_acquire_task_handle(void);     // FreeRTOS handle of the USB acquire thread, or NULL
 /* The acquire thread's own stack high-water mark (bytes), refreshed by the thread itself; see rtl433_port.h */
 extern volatile unsigned rtl433_port_acquire_stack_free;
+extern volatile unsigned rtl433_port_decode_stack_free;  // the decoding task's own, likewise
 
 // Snapshot of the USB stream counters; false while no dongle is open
 struct rtl433_usb_stats {

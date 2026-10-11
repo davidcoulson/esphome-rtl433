@@ -801,7 +801,7 @@ index cafd63c..75ecfb4 100644
      return buf;
  }
 diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
-index c8bb91d..ee0ea6d 100644
+index c8bb91d..f8a808b 100644
 --- a/idf/rtl433_core/src/rtl_433.c
 +++ b/idf/rtl433_core/src/rtl_433.c
 @@ -29,6 +29,9 @@
@@ -971,6 +971,16 @@ index c8bb91d..ee0ea6d 100644
              exit(2);
          }
      }
+@@ -1919,6 +1989,9 @@ int main(int argc, char **argv) {
+ 
+     while (!cfg->exit_async) {
+         mg_mgr_poll(cfg->mgr, 500);
++#ifdef ESP_RTL_SDR
++        rtl433_port_main_tick(); // health figures the ESPHome component reads
++#endif
+     }
+     if (cfg->verbosity >= LOG_INFO) {
+         print_log(LOG_INFO, "rtl_433", "stopping...");
 diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
 index 2436821..a96cb01 100644
 --- a/idf/rtl433_core/src/sdr.c

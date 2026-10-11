@@ -37,6 +37,18 @@ void rtl433_port_note_acquire_task(void) { acquire_task = xTaskGetCurrentTaskHan
 int rtl433_port_on_acquire_task(void) { return acquire_task != NULL && xTaskGetCurrentTaskHandle() == acquire_task; }
 void *rtl433_port_acquire_task_handle(void) { return acquire_task; }
 
+volatile unsigned rtl433_port_decode_stack_free = 0;
+
+// From rtl_433's main loop, at least every 500 ms (mg_mgr_poll's timeout)
+void rtl433_port_main_tick(void) {
+  static TickType_t last_hwm = 0;
+  TickType_t now = xTaskGetTickCount();
+  if (last_hwm == 0 || now - last_hwm > pdMS_TO_TICKS(1000)) {
+    last_hwm = now;
+    rtl433_port_decode_stack_free = (unsigned) uxTaskGetStackHighWaterMark(NULL);
+  }
+}
+
 static rtl433_port_log_sink_t log_sink = NULL;
 
 void rtl433_port_set_log_sink(rtl433_port_log_sink_t sink) { log_sink = sink; }

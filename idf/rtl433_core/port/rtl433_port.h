@@ -42,6 +42,10 @@ int rtl433_port_on_acquire_task(void);
    a second. Read this instead of calling uxTaskGetStackHighWaterMark() on its handle: the thread is
    recreated on every input restart (dongle replug) and a stale handle is a load fault. */
 extern volatile unsigned rtl433_port_acquire_stack_free;
+/* The same for the decoding (main) task, refreshed from its main loop by rtl433_port_main_tick(): the
+   component never queries the task's handle, which is gone once rtl_433 has exited. */
+extern volatile unsigned rtl433_port_decode_stack_free;
+void rtl433_port_main_tick(void);
 void rtl433_port_wdt_subscribe(void);
 void rtl433_port_wdt_feed(void);
 void rtl433_port_wdt_unsubscribe(void); /* a subscribed task must call this before it exits */
