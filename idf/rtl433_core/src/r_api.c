@@ -601,9 +601,8 @@ void r_redirect_logging(r_cfg_t *cfg)
 /** Pass the data structure to all output handlers. Frees data afterwards. */
 void event_occurred_handler(r_cfg_t *cfg, data_t *data)
 {
-#ifdef ESP_RTL_SDR
-    rtl433_port_count_event();
-#endif
+    // not counted for decoded_events: these are stats, raw pulse and SDR reports (decodes go through
+    // data_acquired_handler(), which counts them)
     // prepend "time" if requested
     if (cfg->report_time != REPORT_TIME_OFF) {
         char time_str[LOCAL_TIME_BUFLEN];

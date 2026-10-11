@@ -488,7 +488,7 @@ index dce0404..8413209 100644
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
 diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
-index 2a94dc5..37a9bc0 100644
+index 2a94dc5..5e14ec2 100644
 --- a/idf/rtl433_core/src/r_api.c
 +++ b/idf/rtl433_core/src/r_api.c
 @@ -84,6 +84,10 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
@@ -557,17 +557,16 @@ index 2a94dc5..37a9bc0 100644
      free(cfg->demod);
      cfg->demod = NULL;
  
-@@ -591,6 +601,9 @@ void r_redirect_logging(r_cfg_t *cfg)
+@@ -591,6 +601,8 @@ void r_redirect_logging(r_cfg_t *cfg)
  /** Pass the data structure to all output handlers. Frees data afterwards. */
  void event_occurred_handler(r_cfg_t *cfg, data_t *data)
  {
-+#ifdef ESP_RTL_SDR
-+    rtl433_port_count_event();
-+#endif
++    // not counted for decoded_events: these are stats, raw pulse and SDR reports (decodes go through
++    // data_acquired_handler(), which counts them)
      // prepend "time" if requested
      if (cfg->report_time != REPORT_TIME_OFF) {
          char time_str[LOCAL_TIME_BUFLEN];
-@@ -629,9 +642,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
+@@ -629,9 +641,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
  }
  
  /** Pass the data structure to all output handlers. Frees data afterwards. */
