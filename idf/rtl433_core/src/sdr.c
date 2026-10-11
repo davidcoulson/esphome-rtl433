@@ -110,6 +110,7 @@ struct sdr_dev {
     int esp_biastee;              ///< -1 = leave as is
     int esp_digital_agc;          ///< -1 = leave as is
     volatile int esp_streaming;
+    uint32_t esp_tune_gen;        ///< bumped (under lock) by every retune or rate change that took effect
 #endif
 
     char *dev_info;
@@ -1333,6 +1334,19 @@ static int esp_sdr_start_stream(sdr_dev_t *dev)
     return 0;
 }
 
+// Throw away what the driver has buffered: a hot retune or rate change does not clear its pull ring, so
+// whatever is in it was captured with the old settings
+static void esp_sdr_discard_buffered(sdr_dev_t *dev, uint8_t *scratch, size_t len)
+{
+    size_t got;
+    int rounds = 0;
+    do {
+        got = 0;
+        if (esp_rtl_sdr_read(dev->esp_dev, scratch, len, 0, &got) != ESP_OK)
+            break; // empty (timeout) or not streaming
+    } while (got == len && ++rounds < 64); // a full read: there may be more
+}
+
 static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_num, uint32_t buf_len)
 {
     size_t buffer_size = (size_t)buf_num * buf_len;
@@ -1350,12 +1364,39 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
     if (!dev->esp_streaming && esp_sdr_start_stream(dev) < 0)
         return -1;
 
+    // Every block is labelled with the settings it was captured with. A retune or rate change (main task)
+    // bumps esp_tune_gen once it has taken effect; samples captured before it can still be in the driver's
+    // ring, and a hop retunes while the previous block is being decoded, so the next block starts by
+    // dropping them, and a block that a change landed in the middle of is dropped whole. That costs about
+    // one block per hop, which used to be decoded at the new band's rate with its decoders anyway.
+    uint32_t seen_gen;
+#ifdef THREADS
+    pthread_mutex_lock(&dev->lock);
+#endif
+    seen_gen = dev->esp_tune_gen;
+#ifdef THREADS
+    pthread_mutex_unlock(&dev->lock);
+#endif
+
     dev->running = 1;
     do {
         if (dev->buffer_pos + buf_len > buffer_size)
             dev->buffer_pos = 0;
         uint8_t *buffer = &dev->buffer[dev->buffer_pos];
         dev->buffer_pos += buf_len;
+
+        uint32_t gen;
+#ifdef THREADS
+        pthread_mutex_lock(&dev->lock);
+#endif
+        gen = dev->esp_tune_gen;
+#ifdef THREADS
+        pthread_mutex_unlock(&dev->lock);
+#endif
+        if (gen != seen_gen) {
+            esp_sdr_discard_buffered(dev, buffer, buf_len);
+            seen_gen = gen;
+        }
 
         size_t n_read = 0;
         int exit_acquire = 0;
@@ -1392,9 +1433,12 @@ static int esp_sdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint3
 #endif
         uint32_t sample_rate      = dev->sample_rate;
         uint32_t center_frequency = dev->center_frequency;
+        gen                       = dev->esp_tune_gen;
 #ifdef THREADS
         pthread_mutex_unlock(&dev->lock);
 #endif
+        if (gen != seen_gen)
+            continue; // the settings changed while this block filled: part of it is the old band
         sdr_event_t ev = {
                 .ev               = SDR_EV_DATA,
                 .sample_rate      = sample_rate,
@@ -1585,10 +1629,16 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
             print_logf(LOG_NOTICE, "SDR", "Tuned to %s.", nice_freq(sdr_get_center_freq(dev)));
     }
 
+    if (r < 0)
+        return r; // a failed retune leaves the device where it was: keep labelling blocks with that
+
 #ifdef THREADS
     pthread_mutex_lock(&dev->lock);
 #endif
     dev->center_frequency = freq;
+#ifdef ESP_RTL_SDR
+    dev->esp_tune_gen++; // the reader drops what the driver buffered before this (see esp_sdr_read_loop)
+#endif
 #ifdef THREADS
     pthread_mutex_unlock(&dev->lock);
 #endif
@@ -1948,6 +1998,9 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
     pthread_mutex_lock(&dev->lock);
 #endif
     dev->sample_rate = rate;
+#ifdef ESP_RTL_SDR
+    dev->esp_tune_gen++; // as for a retune
+#endif
 #ifdef THREADS
     pthread_mutex_unlock(&dev->lock);
 #endif

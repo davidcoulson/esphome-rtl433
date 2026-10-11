@@ -70,7 +70,17 @@ Flush the SDR IQ data frame processing, e.g. on the end of a input file.
 */
 int flush_sdr_flow(r_cfg_t *cfg)
 {
-    return push_sdr_flow(cfg, NULL, 0);
+    int events = push_sdr_flow(cfg, NULL, 0);
+#ifdef ESP_PLATFORM
+    // The look-behind block belongs to the input before the flush (on a hop, the old band at the old
+    // rate): never replay it, or force its tail, into what comes after
+    if (cfg->demod) {
+        cfg->demod->squelch_prev_len    = 0;
+        cfg->demod->squelch_prev_active = 0;
+        cfg->demod->squelch_prev_done   = 0;
+    }
+#endif
+    return events;
 }
 
 /**
