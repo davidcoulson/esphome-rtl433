@@ -14,7 +14,7 @@ RTL-SDR dongle ──USB 2.0 HS──► esp_rtl_sdr (USB host driver, CU8 I/Q)
 ```
 
 - `idf/rtl433_core/`: rtl_433 (pinned upstream commit in [`UPSTREAM`](idf/rtl433_core/UPSTREAM)) built as an ESP-IDF component. The changes to upstream are in [`rtl_433-esp.patch`](idf/rtl433_core/rtl_433-esp.patch): an `esp` input backend in `src/sdr.c`, a log hook in `src/logger.c`, and the fixes listed below. Everything else is shimmed from `port/` (`exit()` ends the task instead of rebooting, no TTY, a few POSIX calls lwIP/picolibc lack).
-- [`esp_rtl_sdr`](https://github.com/hardcoreerik/esp-rtl-sdr) is the USB host driver for the dongle, fetched as an IDF component. It is clean-room and experimental. **This component currently pins a [fork](https://github.com/davidcoulson/esp-rtl-sdr/tree/nooelec-gain-cap-test)** carrying the fixes in [Known issues](#known-issues) until they land upstream.
+- [`esp_rtl_sdr`](https://github.com/hardcoreerik/esp-rtl-sdr) is the USB host driver for the dongle, fetched as an IDF component. It is clean-room and experimental. **This component pins a [fork](https://github.com/davidcoulson/esp-rtl-sdr) at `v0.9.3-dc.1`**: upstream v0.9.3 plus lifecycle and recovery fixes and a selectable R820T2 IF mode (see [Known issues](#known-issues)).
 - `components/rtl_433/`: the ESPHome component. It starts rtl_433 in its own task (64 KB stack) once the network is up and the clock is set, routes its log into the ESPHome logger, and flags the component as errored if rtl_433 ever exits.
 
 Changes to upstream rtl_433 worth knowing about: the demodulator's four internal buffers are sized to 256 K samples instead of 4 M (36 MB, which no ESP32 has); `-D restart` really restarts (upstream exits after the first watchdog restart); the USB driver stays installed for the life of the firmware, so a replugged dongle is picked up by the driver's own rescan; a missing dongle at boot is retried instead of fatal, every 1.5 s without blocking the HTTP server; the SDR setters no longer go through `pthread_self()`, which aborts on ESP-IDF when called from a plain FreeRTOS task; getopt is reset the way newlib needs (upstream's reset printed a stray `invalid option -- '--'`); the HTTP server sends events only to WebSocket, `/events` and `/stream` clients (upstream also appended every event to the listening socket's send buffer, which is never drained, so PSRAM fell steadily for as long as the board was up; and into the replies of plain keep-alive HTTP connections); `get_dev_info` answers `null` while no dongle is open instead of crashing; the JSON command parsers check every token index against what jsmn parsed; and the HTTP API can be made read-only (`remote_control: false`).
@@ -35,7 +35,7 @@ What it costs at runtime, measured on the P4 at 360 MHz with zero dropped sample
 | 915 MHz, 2048 kS/s | 89 % (33 % with `squelch`) | 45 % |
 | 433.92 MHz, 250 kS/s | not measured on its own (an eighth of the samples) | |
 
-Free internal heap ~290 KB, PSRAM ~26 MB, decoding task peak stack ~27 KB of 64 KB, chip at ~36 °C in a case. A band hop that changes sample rate takes about a quarter of a second.
+Free internal heap ~290 KB, PSRAM ~26 MB, decoding task peak stack ~27 KB of 64 KB, chip at ~36 °C in a case. A band hop that changes sample rate restarts the stream, about a second (the driver can't change the rate while streaming).
 
 ## Usage
 
@@ -50,7 +50,7 @@ time:                     # required: events carry a timestamp the HA integratio
   - platform: homeassistant
 
 external_components:
-  - source: github://davidcoulson/esphome-rtl433@v0.1.8
+  - source: github://davidcoulson/esphome-rtl433@v0.1.11
     components: [rtl_433]
 
 rtl_433:
@@ -72,7 +72,7 @@ rtl_433:
 
 Then in Home Assistant: Settings → Devices & services → rtl_433 → add a hub with the device's IP, port `8433`, path `/ws`. Devices appear under the hub's *Add discovered devices* once they have been heard. If you are moving from an existing rtl_433 hub, copy its *Device mappings* over first (they hold things like the ×0.01 / CCF conversion on utility meters), then add the same devices under the new hub; the entity ids come back the same.
 
-Per-band sample rates are an addition to rtl_433 (upstream uses one rate for every hop): each `-s` pairs with the `-f` in the same position, as `-H` already does. The driver changes the rate in place between USB transfers, so mixing rates costs nothing beyond the hop itself.
+Per-band sample rates are an addition to rtl_433 (upstream uses one rate for every hop): each `-s` pairs with the `-f` in the same position, as `-H` already does. The driver can't change the rate while streaming, so a hop that changes it stops and restarts the stream (about a second of samples).
 
 ### All options
 
@@ -101,6 +101,7 @@ Per-band sample rates are an addition to rtl_433 (upstream uses one rate for eve
 | `verbosity` | `-v` | `0` | rtl_433 log detail, 0-4 |
 | `extra_args` | anything | | Passed through verbatim (but not `-A`, see Known issues) |
 | `remote_control` | | `true` | `false`: the HTTP API answers queries only; every command that would change the receiver is refused |
+| `r820t2_if_mode` | | `table` | R820T2 dongles (Nooelec SMArt v5, Blog V3): how the tuner's IF filter and IF follow the sample rate. `table` is what this component was verified with (see Known issues); `vendor_fixed` (upstream esp_rtl_sdr's default: wide filter, 3.57 MHz IF at every rate) left 915 MHz nearly deaf here; `librtlsdr` is `r82xx_set_bandwidth()`'s mapping, untested |
 | `time_sync_timeout` | | `120s` | Hold rtl_433 back until the clock is set (so the first events don't carry 1970 timestamps), at most this long; `0s` to not wait |
 
 Tuning (ESP32 side):
@@ -136,15 +137,11 @@ With `remote_control: true` (the default), the integration's SDR controls (frequ
 
 ## Known issues
 
-These are in the USB driver, esp_rtl_sdr v0.8.0-rc3, and reported upstream. The pinned fork fixes them.
+The USB driver, esp_rtl_sdr, started out (v0.8.0-rc3) with several problems on R820T2 dongles, found here and reported upstream: the tuner front end stuck on the FM band ([esp-rtl-sdr#25](https://github.com/hardcoreerik/esp-rtl-sdr/issues/25)), 225k-300k rates rejected ([#24](https://github.com/hardcoreerik/esp-rtl-sdr/issues/24)), no manual or automatic gain on the Nooelec, a deaf AGC, and crashes or a dead dongle after an unplug or a failed enumeration. Upstream v0.9.3 has fixes for these. The pinned fork (`v0.9.3-dc.1`) is upstream v0.9.3 plus:
 
-- **R820T2 dongles (Blog V3, Nooelec) streamed but never decoded anything** ([esp-rtl-sdr#25](https://github.com/hardcoreerik/esp-rtl-sdr/issues/25)). The driver's R820T2 path replays a USB capture from a Blog V4 and only retunes the PLL per frequency; the tuner's RF mux and tracking filter stayed on the FM band the capture was taken in, so the ADC saw nothing at 433 or 915 MHz. The fork programs the front end for the tuned band (librtlsdr's R820T band table) after every tune.
-- **Sample rates of 225k-300k failed with `ESP_RTL_SDR_ERR_BAD_RATE`** ([esp-rtl-sdr#24](https://github.com/hardcoreerik/esp-rtl-sdr/issues/24)): the rate quantizer left out librtlsdr's bit-27-into-bit-28 step, so every low-range rate turned into a bogus 450k-900k one. Fixed in the fork; 250k works again.
-- **No manual or automatic gain on the Nooelec profile** (`ESP_RTL_SDR_ERR_UNSUPPORTED`). The fork enables manual gain (the same R820T2 register path as the Blog V3) and adds automatic gain for R820T2 tuners (librtlsdr's recipe: LNA and mixer AGC, VGA 26.5 dB).
-- **The 915 MHz band was nearly deaf, and more gain made it worse.** The replayed init leaves the R820T2's IF filter at librtlsdr's 2.2 MHz setting, which librtlsdr pairs with a 1.75 MHz IF, while the driver tuned and demodulated at a 3.57 MHz IF: the wanted signal sat at the edge of the filter and the image 7 MHz away was barely rejected. Harmless on a quiet band, fatal on the 915 MHz ISM band once the AGC amplified the neighbours. The fork sets the IF filter and IF per sample rate exactly as librtlsdr's `r82xx_set_bandwidth()` does, and retunes. Measured side by side with rtl_433 on a Linux box and the same dongle model: from zero utility-meter decodes in ten minutes to half of Linux's count with 80% of the dwell, including neighbours' meters.
-- **Automatic gain heard nothing** on R820T2 tuners: the replayed init leaves the LNA's power detectors off, so the AGC had nothing to measure and parked at minimum gain. The fork turns them on as librtlsdr's init does. Auto gain is now the recommended setting; it decodes the 433 MHz sensors at ~15 dB better SNR than a fixed 40 dB.
-- **A dongle unplugged mid-stream could crash the board**, and **a dongle whose USB enumeration failed at boot stayed dead** until replugged (about one boot in four here). The fork retires the in-flight transfers on disconnect instead of touching the closing device, and power-cycles the USB port when no device has enumerated for ten seconds.
-- The fork also backports four fixes from upstream's in-progress branch: a bulk transfer pool leaked on every stream restart, a halted bulk endpoint killed the stream instead of recovering, the I2C repeater wasn't opened before a hot retune, and the fault guard's timer lived in RTC_NOINIT memory.
+- **Recovery without a reboot** from a transient USB error or an unplug (the driver used to stay in FAULT), a retune that fails is rolled back, stale samples are dropped after a retune or restart, and an unlocked PLL is logged and counted.
+- **The R820T2 IF filter and IF per sample rate**, as the `r820t2_if_mode` option. **The 915 MHz band was nearly deaf, and more gain made it worse,** with the IF filter at librtlsdr's 2.2 MHz setting while the driver demodulated at a 3.57 MHz IF: the wanted signal sat at the edge of the filter and the image was barely rejected, which is fatal on the busy 915 MHz band once the AGC amplifies the neighbours. Setting the filter and IF per sample rate (`table`, the default here) took a Nooelec from zero utility-meter decodes in ten minutes to half of a Linux rtl_433's count with 80% of the dwell. Upstream keeps the vendor driver's fixed setting (`vendor_fixed`) and is tracking the question in [esp-rtl-sdr#53](https://github.com/hardcoreerik/esp-rtl-sdr/issues/53).
+- Upstream has no in-place sample-rate change, so a hop between bands with different rates restarts the stream (about a second).
 - Do not pass `-A` (rtl_433's pulse analyzer) in `extra_args`: it puts two full pulse buffers on the stack and overflows the decoding task the moment the first burst arrives.
 
 ## Testing
@@ -152,7 +149,7 @@ These are in the USB driver, esp_rtl_sdr v0.8.0-rc3, and reported upstream. The 
 - **Config tests** (no hardware, no compiler): `python3 tests/config_tests.py` runs a set of YAML cases through ESPHome. Valid ones are generated with `esphome compile --only-generate` and the rtl_433 command line and setters are checked; invalid ones must fail validation with the right message.
 - **Hardware smoke test**: `python3 tests/hw_smoke.py <ip> --band 433920000:250000 --band 915000000:2048000 [--read-only] [--expect-events]` checks a running receiver over its API: dongle open, clock set before start, every band visited at its rate, frames detected, WebSocket delivering JSON, and read-only mode if expected.
 - **Compile test**: `esphome compile tests/p4-wifi6-poe-eth.yaml` builds every option.
-- **Driver**: the fork's host unit tests (`tests/scripts/run_host_tests.sh` in [esp-rtl-sdr](https://github.com/davidcoulson/esp-rtl-sdr/tree/nooelec-gain-cap-test)) check the rate quantizer against librtlsdr's arithmetic, the R820T2 band table, and the dongle profiles.
+- **Driver**: the fork's host unit tests (`tests/scripts/run_host_tests.sh` in [esp-rtl-sdr](https://github.com/davidcoulson/esp-rtl-sdr))) check the rate quantizer against librtlsdr's arithmetic, the R820T2 band table, and the dongle profiles.
 - **Driver development**: `ESP_RTL_SDR_LOCAL_PATH=/path/to/esp_rtl_sdr esphome compile ...` builds a local driver checkout instead of the pinned one (the directory must be named `esp_rtl_sdr`).
 
 ## Debugging notes

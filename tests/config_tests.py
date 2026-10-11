@@ -115,6 +115,7 @@ CASES = [
     ("unknown decoder is rejected", {"decoders": ["not_a_decoder"]}, ("error", "unknown rtl_433 decoder")),
     ("decoder number past the registry is rejected", {"decoders": [387]}, ("error", "at most 386")),
     ("gain out of range is rejected", {"gain": 60}, ("error", "")),
+    ("unknown r820t2_if_mode is rejected", {"r820t2_if_mode": "wide"}, ("error", "Unknown value")),
     ("missing psram is rejected", lambda c: c.pop("psram"), ("error", "needs PSRAM")),
     ("missing time source is rejected", lambda c: c.pop("time"), ("error", "needs a time source")),
 ]

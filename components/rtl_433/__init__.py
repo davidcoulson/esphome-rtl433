@@ -45,7 +45,7 @@ CONF_EXTRA_ARGS = "extra_args"
 # Not in master, so no longer here: the in-place sample-rate change (the driver refuses a rate change while
 # streaming, and sdr_set_sample_rate() then stops and restarts the stream).
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "34d7b1fad69e144f408466fb00368fbada080102"  # branch upstream-a5dc9d8 (fork PRs #3, #4, #5 merged)
+ESP_RTL_SDR_REF = "v0.9.3-dc.1"  # = 34d7b1f, the fork's master: upstream v0.9.3 + fork PRs #3, #4, #5
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
@@ -83,6 +83,13 @@ CONF_HOP_ON_EVENT = "hop_on_event"
 CONF_TAGS = "tags"
 CONF_VERBOSITY = "verbosity"
 CONF_REMOTE_CONTROL = "remote_control"
+CONF_R820T2_IF_MODE = "r820t2_if_mode"
+# esp_rtl_sdr Kconfig choice for the R820T2 (Blog V3, Nooelec) IF filter and IF per sample rate
+R820T2_IF_MODES = {
+    "vendor_fixed": "CONFIG_ESP_RTL_SDR_ESP_R820T2_IF_VENDOR_FIXED",
+    "table": "CONFIG_ESP_RTL_SDR_ESP_R820T2_IF_TABLE",
+    "librtlsdr": "CONFIG_ESP_RTL_SDR_ESP_R820T2_IF_LIBRTLSDR",
+}
 CONF_TIME_SYNC_TIMEOUT = "time_sync_timeout"
 CONF_LOG_TASK_STATS = "log_task_stats"
 CONF_DECODE_STACK_FREE = "decode_stack_free"
@@ -237,6 +244,11 @@ CONFIG_SCHEMA = cv.All(
             # false: rtl_433's HTTP API answers queries only, so nobody on the network can retune or
             # reconfigure the receiver through /cmd (Home Assistant's SDR controls stop working too)
             cv.Optional(CONF_REMOTE_CONTROL, default=True): cv.boolean,
+            # R820T2 dongles (Nooelec SMArt v5, Blog V3): how the IF filter and IF follow the sample rate.
+            # table (default): the per-rate table this component has been verified with (915 MHz works);
+            # vendor_fixed: upstream esp_rtl_sdr's default, a wide filter and 3.57 MHz IF at every rate,
+            # under which 915 MHz was nearly deaf here; librtlsdr: r82xx_set_bandwidth's mapping, untested.
+            cv.Optional(CONF_R820T2_IF_MODE, default="table"): cv.one_of(*R820T2_IF_MODES, lower=True),
             # Hold rtl_433 back until the clock is set, so the first events don't carry 1970 timestamps;
             # start anyway after this long (0 = don't wait)
             cv.Optional(CONF_TIME_SYNC_TIMEOUT, default="120s"): cv.positive_time_period_milliseconds,
@@ -457,6 +469,7 @@ async def to_code(config):
     esp32.include_builtin_idf_component("pthread")
     # Its sample buffers (15 x 256 KB) come from plain malloc(), so malloc must reach PSRAM
     add_idf_sdkconfig_option("CONFIG_SPIRAM_USE_MALLOC", True)
+    add_idf_sdkconfig_option(R820T2_IF_MODES[config[CONF_R820T2_IF_MODE]], True)
     # HTTP listener(s), Mongoose's internal socket pair, one WebSocket per Home Assistant hub, plus the API
     add_idf_sdkconfig_option("CONFIG_LWIP_MAX_SOCKETS", 16)
     # esp_rtl_sdr's descriptor and tuner transfers (its P4 reference config uses 1024)
