@@ -14,7 +14,7 @@ RTL-SDR dongle ──USB 2.0 HS──► esp_rtl_sdr (USB host driver, CU8 I/Q)
 ```
 
 - `idf/rtl433_core/`: rtl_433 (pinned upstream commit in [`UPSTREAM`](idf/rtl433_core/UPSTREAM)) built as an ESP-IDF component. The changes to upstream are in [`rtl_433-esp.patch`](idf/rtl433_core/rtl_433-esp.patch): an `esp` input backend in `src/sdr.c`, a log hook in `src/logger.c`, and the fixes listed below. Everything else is shimmed from `port/` (`exit()` ends the task instead of rebooting, no TTY, a few POSIX calls lwIP/picolibc lack).
-- [`esp_rtl_sdr`](https://github.com/hardcoreerik/esp-rtl-sdr) is the USB host driver for the dongle, fetched as an IDF component. It is clean-room and experimental. **This component pins a [fork](https://github.com/davidcoulson/esp-rtl-sdr) at `v0.9.3-dc.1`**: upstream v0.9.3 plus lifecycle and recovery fixes and a selectable R820T2 IF mode (see [Known issues](#known-issues)).
+- [`esp_rtl_sdr`](https://github.com/hardcoreerik/esp-rtl-sdr) is the USB host driver for the dongle, fetched as an IDF component. It is clean-room and experimental. **This component pins a [fork](https://github.com/davidcoulson/esp-rtl-sdr) at `v0.9.4-dc.1`**: upstream v0.9.4 plus lifecycle and recovery fixes and a selectable R820T2 IF mode (see [Known issues](#known-issues)).
 - `components/rtl_433/`: the ESPHome component. It starts rtl_433 in its own task (64 KB stack) once the network is up and the clock is set, routes its log into the ESPHome logger, and flags the component as errored if rtl_433 ever exits.
 
 Changes to upstream rtl_433 worth knowing about: the demodulator's four internal buffers are sized to 256 K samples instead of 4 M (36 MB, which no ESP32 has); `-D restart` really restarts (upstream exits after the first watchdog restart); the USB driver stays installed for the life of the firmware, so a replugged dongle is picked up by the driver's own rescan; a missing dongle at boot is retried instead of fatal, every 1.5 s without blocking the HTTP server; the SDR setters no longer go through `pthread_self()`, which aborts on ESP-IDF when called from a plain FreeRTOS task; getopt is reset the way newlib needs (upstream's reset printed a stray `invalid option -- '--'`); the HTTP server sends events only to WebSocket, `/events` and `/stream` clients (upstream also appended every event to the listening socket's send buffer, which is never drained, so PSRAM fell steadily for as long as the board was up; and into the replies of plain keep-alive HTTP connections); `get_dev_info` answers `null` while no dongle is open instead of crashing; the JSON command parsers check every token index against what jsmn parsed; and the HTTP API can be made read-only (`remote_control: false`).
@@ -50,7 +50,7 @@ time:                     # required: events carry a timestamp the HA integratio
   - platform: homeassistant
 
 external_components:
-  - source: github://davidcoulson/esphome-rtl433@v0.1.11
+  - source: github://davidcoulson/esphome-rtl433@v0.1.12
     components: [rtl_433]
 
 rtl_433:
@@ -137,7 +137,7 @@ With `remote_control: true` (the default), the integration's SDR controls (frequ
 
 ## Known issues
 
-The USB driver, esp_rtl_sdr, started out (v0.8.0-rc3) with several problems on R820T2 dongles, found here and reported upstream: the tuner front end stuck on the FM band ([esp-rtl-sdr#25](https://github.com/hardcoreerik/esp-rtl-sdr/issues/25)), 225k-300k rates rejected ([#24](https://github.com/hardcoreerik/esp-rtl-sdr/issues/24)), no manual or automatic gain on the Nooelec, a deaf AGC, and crashes or a dead dongle after an unplug or a failed enumeration. Upstream v0.9.3 has fixes for these. The pinned fork (`v0.9.3-dc.1`) is upstream v0.9.3 plus:
+The USB driver, esp_rtl_sdr, started out (v0.8.0-rc3) with several problems on R820T2 dongles, found here and reported upstream: the tuner front end stuck on the FM band ([esp-rtl-sdr#25](https://github.com/hardcoreerik/esp-rtl-sdr/issues/25)), 225k-300k rates rejected ([#24](https://github.com/hardcoreerik/esp-rtl-sdr/issues/24)), no manual or automatic gain on the Nooelec, a deaf AGC, and crashes or a dead dongle after an unplug or a failed enumeration. Upstream v0.9.3 has fixes for these. The pinned fork (`v0.9.4-dc.1`) is upstream v0.9.4 plus:
 
 - **Recovery without a reboot** from a transient USB error or an unplug (the driver used to stay in FAULT), a retune that fails is rolled back, stale samples are dropped after a retune or restart, and an unlocked PLL is logged and counted.
 - **The R820T2 IF filter and IF per sample rate**, as the `r820t2_if_mode` option. **The 915 MHz band was nearly deaf, and more gain made it worse,** with the IF filter at librtlsdr's 2.2 MHz setting while the driver demodulated at a 3.57 MHz IF: the wanted signal sat at the edge of the filter and the image was barely rejected, which is fatal on the busy 915 MHz band once the AGC amplifies the neighbours. Setting the filter and IF per sample rate (`table`, the default here) took a Nooelec from zero utility-meter decodes in ten minutes to half of a Linux rtl_433's count with 80% of the dwell. Upstream keeps the vendor driver's fixed setting (`vendor_fixed`) and is tracking the question in [esp-rtl-sdr#53](https://github.com/hardcoreerik/esp-rtl-sdr/issues/53).

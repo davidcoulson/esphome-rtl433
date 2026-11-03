@@ -31,21 +31,21 @@ CONF_GAIN = "gain"
 CONF_PPM_ERROR = "ppm_error"
 CONF_EXTRA_ARGS = "extra_args"
 
-# Pinned to esp_rtl_sdr master (v0.9.3, a5dc9d8) plus lifecycle fixes on the fork's branch
-# fix/lifecycle-upstream, until upstream takes them. Master already has what the old fork pin was for:
+# Pinned to the fork's v0.9.4-dc.1: esp_rtl_sdr upstream v0.9.4 plus the fork's lifecycle fixes, until upstream
+# takes them. Upstream already has what the old fork pin was for:
 # the R820T2 RF mux / tracking filter (#25), LOW-range rates (#24), Nooelec gain restore, unplug and
-# enumeration-retry recovery, bounded control transfers and the bulk-pool leak fix. The branch adds
+# enumeration-retry recovery, bounded control transfers and the bulk-pool leak fix. The fork adds
 # recovery from a transient USB error or an unplug without a reboot (interface ownership kept on a failed
 # release, atomic URB count, start() owning the device, endpoint-recovery give-up reported as FAULT),
 # rollback of a failed retune, stale-IQ dropping after a retune or restart, and the other review fixes.
 # An unlocked PLL read only warns (and is counted); it doesn't fail the tune.
-# The per-sample-rate R820T2 IF filter / IF (upstream #47 / #53) is a build option on that branch:
+# The per-sample-rate R820T2 IF filter / IF (upstream #47 / #53) is a build option on the fork:
 # CONFIG_ESP_RTL_SDR_ESP_R820T2_IF_VENDOR_FIXED (A, default, = upstream), _IF_TABLE (B, the old fork's
 # table) or _IF_LIBRTLSDR (C), set through esp32: framework: sdkconfig_options.
 # Not in master, so no longer here: the in-place sample-rate change (the driver refuses a rate change while
 # streaming, and sdr_set_sample_rate() then stops and restarts the stream).
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "v0.9.3-dc.1"  # = 34d7b1f, the fork's master: upstream v0.9.3 + fork PRs #3, #4, #5
+ESP_RTL_SDR_REF = "v0.9.4-dc.1"  # upstream v0.9.4 + the fork's lifecycle/recovery patches and R820T2 IF mode
 USB_REF = "1.4.1"  # same espressif/usb ESPHome's usb_host pins for IDF 6
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
