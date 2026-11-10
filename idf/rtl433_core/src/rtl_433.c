@@ -1371,7 +1371,7 @@ static int start_sdr(r_cfg_t *cfg)
         print_log(LOG_NOTICE, "Input", "Reading samples in async mode...");
     }
 
-    sdr_set_center_freq(cfg->dev, cfg->center_frequency, 1); // always verbose
+    sdr_set_center_freq(cfg->dev, cfg->frequencies > 1 ? cfg->frequency[cfg->frequency_index] : cfg->center_frequency, 1); // hopping: center_frequency is the last band that delivered data, stale after a failed hop
 
     r = sdr_start(cfg->dev, acquire_callback, (void *)get_mgr(cfg),
             DEFAULT_ASYNC_BUF_NUMBER, cfg->out_block_size);

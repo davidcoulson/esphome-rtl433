@@ -114,6 +114,8 @@ CASES = [
     ("rate above 3.2M is rejected", {"sample_rate": "3300k"}, ("error", "sample_rate must be")),
     ("unknown decoder is rejected", {"decoders": ["not_a_decoder"]}, ("error", "unknown rtl_433 decoder")),
     ("decoder number past the registry is rejected", {"decoders": [387]}, ("error", "at most 386")),
+    ("usb_buffer above the driver's 1 MB is rejected", {"usb_buffer": "2MB"}, ("error", "usb_buffer")),
+    ("odd usb_buffer is rejected", {"usb_buffer": 100001}, ("error", "even number")),
     ("gain out of range is rejected", {"gain": 60}, ("error", "")),
     ("unknown r820t2_if_mode is rejected", {"r820t2_if_mode": "wide"}, ("error", "Unknown value")),
     ("missing psram is rejected", lambda c: c.pop("psram"), ("error", "needs PSRAM")),

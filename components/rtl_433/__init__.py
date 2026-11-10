@@ -31,7 +31,7 @@ CONF_GAIN = "gain"
 CONF_PPM_ERROR = "ppm_error"
 CONF_EXTRA_ARGS = "extra_args"
 
-# Pinned to the fork's v0.9.4-dc.1: esp_rtl_sdr upstream v0.9.4 plus the fork's lifecycle fixes, until upstream
+# Pinned to the fork's v0.9.6-dc.1: esp_rtl_sdr upstream v0.9.6 plus the fork's lifecycle fixes, until upstream
 # takes them. Upstream already has what the old fork pin was for:
 # the R820T2 RF mux / tracking filter (#25), LOW-range rates (#24), Nooelec gain restore, unplug and
 # enumeration-retry recovery, bounded control transfers and the bulk-pool leak fix. The fork adds
@@ -45,8 +45,8 @@ CONF_EXTRA_ARGS = "extra_args"
 # Not in master, so no longer here: the in-place sample-rate change (the driver refuses a rate change while
 # streaming, and sdr_set_sample_rate() then stops and restarts the stream).
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "v0.9.4-dc.1"  # upstream v0.9.4 + the fork's lifecycle/recovery patches and R820T2 IF mode
-USB_REF = "1.6.0"  # esp_rtl_sdr v0.9.4 requires espressif/usb 1.6.0 on IDF 6 (ESPHome usb_host pins 1.4.1, which this config does not use)
+ESP_RTL_SDR_REF = "v0.9.6-dc.1"  # upstream v0.9.6 + the fork's lifecycle/recovery patches and R820T2 IF mode
+USB_REF = "1.6.0"  # esp_rtl_sdr v0.9.6 requires espressif/usb 1.6.0 on IDF 6 (ESPHome usb_host pins 1.4.1, which this config does not use)
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
 # relative to this file, which works for a local path and for a github:// source alike (ESPHome clones
@@ -102,6 +102,13 @@ CONF_DROPPED_SAMPLES = "dropped_samples"
 CONF_DECODED_EVENTS = "decoded_events"
 CONF_CPU_LOAD_CORE0 = "cpu_load_core0"
 CONF_CPU_LOAD_CORE1 = "cpu_load_core1"
+
+
+def _even(value):
+    # esp_rtl_sdr rejects an odd ring size (IQ pairs), and the install then fails at boot
+    if value % 2:
+        raise cv.Invalid("usb_buffer must be an even number of bytes")
+    return value
 
 
 def _bytes(value):
@@ -235,7 +242,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_VERBOSITY, default=0): cv.int_range(min=0, max=4),
             # USB driver's sample ring (PSRAM). The default holds ~50-125 ms at 2 MS/s; a longer decode burst
             # than that drops samples (see dropped_samples)
-            cv.Optional(CONF_USB_BUFFER): cv.All(_bytes, cv.int_range(min=64 << 10, max=8 << 20)),
+            cv.Optional(CONF_USB_BUFFER): cv.All(_bytes, cv.int_range(min=64 << 10, max=1 << 20), _even),  # 1 MB: the driver's limit
             # FreeRTOS priorities: rtl_433's decoding task, its USB acquire thread, the driver's USB task
             # (0 = driver default)
             cv.Optional(CONF_TASK_PRIORITY, default=5): cv.int_range(min=1, max=22),
