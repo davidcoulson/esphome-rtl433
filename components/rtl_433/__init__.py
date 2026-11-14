@@ -35,7 +35,7 @@ CONF_GAIN = "gain"
 CONF_PPM_ERROR = "ppm_error"
 CONF_EXTRA_ARGS = "extra_args"
 
-# Pinned to the fork's v0.9.6-dc.1: esp_rtl_sdr upstream v0.9.6 plus the fork's lifecycle fixes, until upstream
+# Pinned to the fork's v0.9.6-dc.2: esp_rtl_sdr upstream v0.9.6 plus the fork's lifecycle fixes, until upstream
 # takes them. Upstream already has what the old fork pin was for:
 # the R820T2 RF mux / tracking filter (#25), LOW-range rates (#24), Nooelec gain restore, unplug and
 # enumeration-retry recovery, bounded control transfers and the bulk-pool leak fix. The fork adds
@@ -49,7 +49,7 @@ CONF_EXTRA_ARGS = "extra_args"
 # Not in master, so no longer here: the in-place sample-rate change (the driver refuses a rate change while
 # streaming, and sdr_set_sample_rate() then stops and restarts the stream).
 ESP_RTL_SDR_REPO = "https://github.com/davidcoulson/esp-rtl-sdr.git"
-ESP_RTL_SDR_REF = "v0.9.6-dc.1"  # upstream v0.9.6 + the fork's lifecycle/recovery patches and R820T2 IF mode
+ESP_RTL_SDR_REF = "v0.9.6-dc.2"  # upstream v0.9.6 + the fork's lifecycle/recovery patches and R820T2 IF mode
 USB_REF = "1.6.0"  # esp_rtl_sdr v0.9.6 requires espressif/usb 1.6.0 on IDF 6 (ESPHome usb_host pins 1.4.1, which this config does not use)
 
 # The ESP-IDF component that wraps the rtl_433 sources lives next to components/ in this repo. It is found
