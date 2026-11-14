@@ -1318,9 +1318,13 @@ static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
 
     size_t info_len = 41 + strlen(info.manufacturer) + strlen(info.product) + strlen(info.serial);
     dev->dev_info = malloc(info_len);
-    if (dev->dev_info)
+    if (!dev->dev_info) {
+        WARN_MALLOC("esp_sdr_open()"); // dev_info stays NULL: get_dev_info reports none
+    }
+    else {
         snprintf(dev->dev_info, info_len, "{\"vendor\":\"%s\", \"product\":\"%s\", \"serial\":\"%s\"}",
                 info.manufacturer, info.product, info.serial);
+    }
 
     pthread_mutex_lock(&esp_active_lock);
     esp_active = dev->esp_dev;

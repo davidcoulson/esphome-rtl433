@@ -516,7 +516,12 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
         if (demod->squelch_prev_cap < len) {
             free(demod->squelch_prev_iq);
             demod->squelch_prev_iq  = malloc(len);
-            demod->squelch_prev_cap = demod->squelch_prev_iq ? len : 0;
+            if (!demod->squelch_prev_iq) {
+                demod->squelch_prev_cap = 0; // no look-behind this piece, try again next one
+            }
+            else {
+                demod->squelch_prev_cap = len;
+            }
         }
         if (demod->squelch_prev_iq) {
             if (!process_frame) // a processed piece is never replayed: skip the copy

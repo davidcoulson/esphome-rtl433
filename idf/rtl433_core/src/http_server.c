@@ -412,21 +412,21 @@ static int json_parse(rpc_t *rpc, struct mg_str const *json)
     for (i = 1; i < r; i++) {
         if (jsoneq(json->p, &t[i], "cmd") == 0) {
             if (++i >= r) {
-                break; // key without a value: jsmn is not strict, {"cmd"} parses
+                break; // a key without a value: jsmn is not strict, {"cmd"} parses
             }
             free(cmd);
             cmd = jsondup(json->p, &t[i]);
         }
         else if (jsoneq(json->p, &t[i], "arg") == 0) {
             if (++i >= r) {
-                break;
+                break; // a key without a value: jsmn is not strict, {"cmd"} parses
             }
             free(arg);
             arg = jsondup(json->p, &t[i]);
         }
         else if (jsoneq(json->p, &t[i], "val") == 0) {
             if (++i >= r) {
-                break;
+                break; // a key without a value: jsmn is not strict, {"cmd"} parses
             }
             char *endptr = NULL;
             val = strtol(json->p + t[i].start, &endptr, 10);
@@ -476,20 +476,20 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
     for (int i = 1; i < r; i++) {
         if (jsoneq(json->p, &t[i], "jsonrpc") == 0) {
             if (++i >= r) {
-                break; // key without a value: jsmn is not strict, {"method"} parses
+                break; // a key without a value: jsmn is not strict, {"cmd"} parses
             }
             // (jsoneq(json->p, &t[i], "2.0") == 0);
         }
         else if (jsoneq(json->p, &t[i], "method") == 0) {
             if (++i >= r) {
-                break;
+                break; // a key without a value: jsmn is not strict, {"cmd"} parses
             }
             free(cmd);
             cmd = jsondup(json->p, &t[i]);
         }
         else if (jsoneq(json->p, &t[i], "id") == 0) {
             if (++i >= r) {
-                break;
+                break; // a key without a value: jsmn is not strict, {"cmd"} parses
             }
             if (t[i].type == JSMN_STRING) {
                 free(id);
@@ -505,7 +505,7 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
             if (i + 1 >= r || t[i + 1].type != JSMN_ARRAY) {
                 continue; /* We expect groups to be an array of strings */
             }
-            // the array's size is its element count, not a token count: stop at the parsed tokens
+            // the array size is its element count, not a token count: stop at the parsed tokens
             for (int j = 0; j < t[i + 1].size && i + j + 2 < r; j++) {
                 jsmntok_t *g = &t[i + j + 2];
                 if (g->type == JSMN_STRING) {
@@ -559,8 +559,7 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
     }
     else if (!strcmp(rpc->method, "get_dev_info")) {
         if (!cfg->dev_info) {
-            // no device open (none at start-up, or a restart waiting for it): unavailable, {"result": null}
-            rpc->response(rpc, 0, NULL, 0);
+            rpc->response(rpc, 0, NULL, 0); // no device open: {"result": null}
         }
         else {
             rpc->response(rpc, 1, cfg->dev_info, 0);
@@ -718,7 +717,7 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
     }
     else if (!strcmp(rpc->method, "gain")) {
         if (!rpc->arg) {
-            rpc->response(rpc, -1, "Missing arg", 0); // ESP port: upstream fell through to auto gain
+            rpc->response(rpc, -1, "Missing arg", 0);
         }
         else {
             set_gain_str(cfg, rpc->arg);
@@ -731,7 +730,7 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
     }
     else if (!strcmp(rpc->method, "ppm_error")) {
         if (set_freq_correction(cfg, rpc->val) < 0) {
-            rpc->response(rpc, -1, "Frequency correction not set", 0); // failed, or no device open
+            rpc->response(rpc, -1, "Frequency correction failed", 0);
         }
         else {
             rpc->response(rpc, 0, "Ok", 0);
@@ -739,7 +738,7 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
     }
     else if (!strcmp(rpc->method, "sample_rate")) {
         if (set_sample_rate(cfg, rpc->val) < 0) {
-            rpc->response(rpc, -1, "Sample rate not set", 0); // unsupported, failed, or no device open
+            rpc->response(rpc, -1, "Sample rate failed", 0);
         }
         else {
             rpc->response(rpc, 0, "Ok", 0);
@@ -1098,7 +1097,7 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
         rpc_exec(&rpc, ctx->cfg);
     }
     else {
-        // a JSON-RPC error in the chunked reply (this used to send a WebSocket frame on the HTTP connection)
+        // a JSON-RPC error in the chunked reply, not a WebSocket frame on an HTTP connection
         rpc.response(&rpc, -1, "Invalid command", 0);
     }
 

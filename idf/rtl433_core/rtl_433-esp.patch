@@ -1,7 +1,8 @@
 diff --git a/idf/rtl433_core/include/pulse_detect.h b/idf/rtl433_core/include/pulse_detect.h
+index af75e1d9..87de2478 100644
 --- a/idf/rtl433_core/include/pulse_detect.h
 +++ b/idf/rtl433_core/include/pulse_detect.h
-@@ -54,6 +54,11 @@
+@@ -54,6 +54,11 @@ void pulse_detect_reset(pulse_detect_t *pulse_detect);
  /// Preserves level estimates and resumes at the gap boundary in the same buffer.
  void pulse_detect_skip_package(pulse_detect_t *pulse_detect);
  
@@ -13,22 +14,8 @@ diff --git a/idf/rtl433_core/include/pulse_detect.h b/idf/rtl433_core/include/pu
  /// Reject a carrier package at PULSE_DETECT_PULSE and keep the OOK envelope, but
  /// span the next pulse of this package for FSK detection again, signalled with
  /// PULSE_DETECT_RETRY. Only one retry per package, later calls are ignored.
-diff --git a/idf/rtl433_core/include/r_api.h b/idf/rtl433_core/include/r_api.h
---- a/idf/rtl433_core/include/r_api.h
-+++ b/idf/rtl433_core/include/r_api.h
-@@ -118,9 +118,9 @@
- 
- void set_center_freq(struct r_cfg *cfg, uint32_t center_freq);
- 
--void set_freq_correction(struct r_cfg *cfg, int freq_correction);
-+int set_freq_correction(struct r_cfg *cfg, int freq_correction);
- 
--void set_sample_rate(struct r_cfg *cfg, uint32_t sample_rate);
-+int set_sample_rate(struct r_cfg *cfg, uint32_t sample_rate);
- 
- void set_gain_str(struct r_cfg *cfg, char const *gain_str);
- 
 diff --git a/idf/rtl433_core/include/r_private.h b/idf/rtl433_core/include/r_private.h
+index 9cde99e4..15346de8 100644
 --- a/idf/rtl433_core/include/r_private.h
 +++ b/idf/rtl433_core/include/r_private.h
 @@ -22,6 +22,14 @@
@@ -47,20 +34,10 @@ diff --git a/idf/rtl433_core/include/r_private.h b/idf/rtl433_core/include/r_pri
      float noise_level;
      float min_level_auto;
 diff --git a/idf/rtl433_core/include/rtl_433.h b/idf/rtl433_core/include/rtl_433.h
+index ba603549..ed4aebc1 100644
 --- a/idf/rtl433_core/include/rtl_433.h
 +++ b/idf/rtl433_core/include/rtl_433.h
-@@ -18,7 +18,9 @@
- #define FSK_PULSE_DETECTOR_LIMIT 800000000
- 
- #define MINIMAL_BUF_LENGTH      512
--#define MAXIMAL_BUF_LENGTH      (256 * 16384)
-+// ESP32: the demod state embeds four buffers of this many samples; 4M samples would be 36 MB.
-+// 256 K samples is one full acquire block (DEFAULT_BUF_LENGTH bytes = 128 K CU8 samples) with room to spare.
-+#define MAXIMAL_BUF_LENGTH      (16 * 16384)
- #define SIGNAL_GRABBER_BUFFER   (12 * DEFAULT_BUF_LENGTH)
- #define MAX_FREQS               32
- 
-@@ -80,6 +82,8 @@
+@@ -83,6 +83,8 @@ typedef struct r_cfg {
      int fsk_pulse_detect_mode;
      int hop_times;
      int hop_time[MAX_FREQS];
@@ -70,9 +47,10 @@ diff --git a/idf/rtl433_core/include/rtl_433.h b/idf/rtl433_core/include/rtl_433
      int duration;
      time_t stop_time;
 diff --git a/idf/rtl433_core/include/sdr.h b/idf/rtl433_core/include/sdr.h
+index 241d2bd2..c23e9a0f 100644
 --- a/idf/rtl433_core/include/sdr.h
 +++ b/idf/rtl433_core/include/sdr.h
-@@ -206,6 +206,12 @@
+@@ -206,6 +206,12 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
  int sdr_stop(sdr_dev_t *dev);
  int sdr_stop_sync(sdr_dev_t *dev);
  
@@ -86,76 +64,10 @@ diff --git a/idf/rtl433_core/include/sdr.h b/idf/rtl433_core/include/sdr.h
  */
  void sdr_redirect_logging(void);
 diff --git a/idf/rtl433_core/src/http_server.c b/idf/rtl433_core/src/http_server.c
+index d0754b6c..6c3840e4 100644
 --- a/idf/rtl433_core/src/http_server.c
 +++ b/idf/rtl433_core/src/http_server.c
-@@ -411,17 +411,23 @@
-     /* Loop over all keys of the root object */
-     for (i = 1; i < r; i++) {
-         if (jsoneq(json->p, &t[i], "cmd") == 0) {
--            i++;
-+            if (++i >= r) {
-+                break; // key without a value: jsmn is not strict, {"cmd"} parses
-+            }
-             free(cmd);
-             cmd = jsondup(json->p, &t[i]);
-         }
-         else if (jsoneq(json->p, &t[i], "arg") == 0) {
--            i++;
-+            if (++i >= r) {
-+                break;
-+            }
-             free(arg);
-             arg = jsondup(json->p, &t[i]);
-         }
-         else if (jsoneq(json->p, &t[i], "val") == 0) {
--            i++;
-+            if (++i >= r) {
-+                break;
-+            }
-             char *endptr = NULL;
-             val = strtol(json->p + t[i].start, &endptr, 10);
-             // compare endptr to t[i].end
-@@ -469,16 +475,22 @@
-     /* Loop over all keys of the root object */
-     for (int i = 1; i < r; i++) {
-         if (jsoneq(json->p, &t[i], "jsonrpc") == 0) {
--            i++;
-+            if (++i >= r) {
-+                break; // key without a value: jsmn is not strict, {"method"} parses
-+            }
-             // (jsoneq(json->p, &t[i], "2.0") == 0);
-         }
-         else if (jsoneq(json->p, &t[i], "method") == 0) {
--            i++;
-+            if (++i >= r) {
-+                break;
-+            }
-             free(cmd);
-             cmd = jsondup(json->p, &t[i]);
-         }
-         else if (jsoneq(json->p, &t[i], "id") == 0) {
--            i++;
-+            if (++i >= r) {
-+                break;
-+            }
-             if (t[i].type == JSMN_STRING) {
-                 free(id);
-                 id = jsondupq(json->p, &t[i]);
-@@ -490,10 +502,11 @@
-         }
-         else if (jsoneq(json->p, &t[i], "params") == 0) {
-             //printf("- Params:\n");
--            if (t[i + 1].type != JSMN_ARRAY) {
-+            if (i + 1 >= r || t[i + 1].type != JSMN_ARRAY) {
-                 continue; /* We expect groups to be an array of strings */
-             }
--            for (int j = 0; j < t[i + 1].size; j++) {
-+            // the array's size is its element count, not a token count: stop at the parsed tokens
-+            for (int j = 0; j < t[i + 1].size && i + j + 2 < r; j++) {
-                 jsmntok_t *g = &t[i + j + 2];
-                 if (g->type == JSMN_STRING) {
-                     free(arg);
-@@ -525,17 +538,33 @@
+@@ -538,11 +538,21 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
      return 0;
  }
  
@@ -177,344 +89,11 @@ diff --git a/idf/rtl433_core/src/http_server.c b/idf/rtl433_core/src/http_server
      // Getter
      else if (!strcmp(rpc->method, "get_dev_query")) {
          rpc->response(rpc, 0, cfg->dev_query, 0);
-     }
-     else if (!strcmp(rpc->method, "get_dev_info")) {
--        rpc->response(rpc, 1, cfg->dev_info, 0);
-+        if (!cfg->dev_info) {
-+            // no device open (none at start-up, or a restart waiting for it): unavailable, {"result": null}
-+            rpc->response(rpc, 0, NULL, 0);
-+        }
-+        else {
-+            rpc->response(rpc, 1, cfg->dev_info, 0);
-+        }
-     }
-     else if (!strcmp(rpc->method, "get_gain")) {
-         rpc->response(rpc, 0, cfg->gain_str, 0);
-@@ -689,22 +718,32 @@
-     }
-     else if (!strcmp(rpc->method, "gain")) {
-         if (!rpc->arg) {
--            rpc->response(rpc, -1, "Missing arg", 0);
-+            rpc->response(rpc, -1, "Missing arg", 0); // ESP port: upstream fell through to auto gain
-+        }
-+        else {
-+            set_gain_str(cfg, rpc->arg);
-+            rpc->response(rpc, 0, "Ok", 0);
-         }
--        set_gain_str(cfg, rpc->arg);
--        rpc->response(rpc, 0, "Ok", 0);
-     }
-     else if (!strcmp(rpc->method, "center_frequency")) {
-         set_center_freq(cfg, rpc->val);
-         rpc->response(rpc, 0, "Ok", 0);
-     }
-     else if (!strcmp(rpc->method, "ppm_error")) {
--        set_freq_correction(cfg, rpc->val);
--        rpc->response(rpc, 0, "Ok", 0);
-+        if (set_freq_correction(cfg, rpc->val) < 0) {
-+            rpc->response(rpc, -1, "Frequency correction not set", 0); // failed, or no device open
-+        }
-+        else {
-+            rpc->response(rpc, 0, "Ok", 0);
-+        }
-     }
-     else if (!strcmp(rpc->method, "sample_rate")) {
--        set_sample_rate(cfg, rpc->val);
--        rpc->response(rpc, 0, "Ok", 0);
-+        if (set_sample_rate(cfg, rpc->val) < 0) {
-+            rpc->response(rpc, -1, "Sample rate not set", 0); // unsupported, failed, or no device open
-+        }
-+        else {
-+            rpc->response(rpc, 0, "Ok", 0);
-+        }
-     }
- 
-     // Invalid
-@@ -725,10 +764,27 @@
-     ring_list_t *history;
- };
- 
-+/// What an accepted connection receives besides replies to its own requests.
-+enum nc_mode {
-+    NC_MODE_HTTP = 0, ///< nothing: plain request/response (keep-alive included)
-+    NC_MODE_EVENTS,   ///< /events: every event as an HTTP chunk
-+    NC_MODE_STREAM,   ///< /stream: every event as a raw line
-+};
-+
-+/// Per-connection state, set up on MG_EV_ACCEPT and freed on MG_EV_CLOSE (or when the server stops).
-+/// The listener's user_data is the server context and accepted connections inherit it from there,
-+/// so the listener (MG_F_LISTENING) never has one of these and must not be treated as having one.
- struct nc_context {
--    int is_chunked;
-+    struct http_server_context *server; ///< the server that accepted this connection
-+    enum nc_mode mode;
- };
- 
-+static struct http_server_context *nc_server(struct mg_connection *nc)
-+{
-+    struct nc_context *cctx = nc->user_data;
-+    return cctx ? cctx->server : NULL;
-+}
-+
- static void handle_options(struct mg_connection *nc, struct http_message *hm)
- {
-     UNUSED(hm);
-@@ -784,7 +840,7 @@
-         return;
-     }
- 
--    struct http_server_context *ctx = nc->user_data;
-+    struct http_server_context *ctx = nc_server(nc);
-     r_cfg_t *cfg = ctx->cfg;
- 
-     time_t now;
-@@ -961,13 +1017,8 @@
-     mg_printf(nc, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
- 
-     /* Mark connection */
--    struct nc_context *ctx = calloc(1, sizeof(*ctx));
--    if (!ctx) {
--        WARN_CALLOC("handle_json_events()");
--        return;
--    }
--    ctx->is_chunked = 1;
--    nc->user_data   = ctx;
-+    struct nc_context *cctx = nc->user_data;
-+    cctx->mode = NC_MODE_EVENTS;
- 
-     mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
- }
-@@ -980,13 +1031,8 @@
-     mg_printf(nc, "HTTP/1.1 200 OK\r\n\r\n");
- 
-     /* Mark connection */
--    struct nc_context *ctx = calloc(1, sizeof(*ctx));
--    if (!ctx) {
--        WARN_CALLOC("handle_json_stream()");
--        return;
--    }
--    ctx->is_chunked = 0;
--    nc->user_data   = ctx;
-+    struct nc_context *cctx = nc->user_data;
-+    cctx->mode = NC_MODE_STREAM;
- 
-     mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
- }
-@@ -1001,7 +1047,7 @@
- // xh :8433/cmd cmd==gain arg==10
- static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
- {
--    struct http_server_context *ctx = nc->user_data;
-+    struct http_server_context *ctx = nc_server(nc);
-     char cmd[100], arg[100], val[100];
-     rpc_t rpc = {
-             .nc = nc,
-@@ -1036,7 +1082,7 @@
- // http POST :8433/jsonrpc jsonrpc=2.0 method=sample_rate params:='[1024000]'
- static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
- {
--    struct http_server_context *ctx = nc->user_data;
-+    struct http_server_context *ctx = nc_server(nc);
- 
-     rpc_t rpc = {
-             .nc       = nc,
-@@ -1052,8 +1098,8 @@
-         rpc_exec(&rpc, ctx->cfg);
-     }
-     else {
--        char *error = "{\"error\":\"Invalid command\"}";
--        mg_send_websocket_frame(nc, WEBSOCKET_OP_TEXT, error, strlen(error));
-+        // a JSON-RPC error in the chunked reply (this used to send a WebSocket frame on the HTTP connection)
-+        rpc.response(&rpc, -1, "Invalid command", 0);
-     }
- 
-     free(rpc.method);
-@@ -1064,7 +1110,7 @@
- // Handles WS with JSON command
- static void handle_ws_rpc(struct mg_connection *nc, struct websocket_message *wm)
- {
--    struct http_server_context *ctx = nc->user_data;
-+    struct http_server_context *ctx = nc_server(nc);
- 
-     rpc_t rpc = {
-             .nc       = nc,
-@@ -1096,28 +1142,61 @@
-         return; // this should not happen
-     }
- 
--    struct nc_context *ctx = nc->user_data;
--    if (!ctx) {
-+    struct nc_context *cctx = nc->user_data;
-+    if (!cctx) {
-         return; // this should not happen
-     }
- 
--    if (ctx->is_chunked) {
-+    if (cctx->mode == NC_MODE_EVENTS) {
-         mg_send_http_chunk(nc, "\r\n", 2);
-     }
--    else {
-+    else if (cctx->mode == NC_MODE_STREAM) {
-         mg_send(nc, "\r\n", 2);
-     }
-+    else {
-+        return; // not streaming: no keep alive
-+    }
-     mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
- }
- 
- static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
- {
-+    if (nc->flags & MG_F_LISTENING) {
-+        return; // the listener only accepts; its user_data is the server context, not a nc_context
-+    }
-+    if (ev == MG_EV_ACCEPT) {
-+        struct nc_context *cctx = calloc(1, sizeof(*cctx));
-+        if (!cctx) {
-+            WARN_CALLOC("ev_handler()");
-+            nc->user_data = NULL;
-+            nc->flags |= MG_F_CLOSE_IMMEDIATELY;
-+            return;
-+        }
-+        cctx->server  = nc->user_data; // inherited from the listener
-+        cctx->mode    = NC_MODE_HTTP;
-+        nc->user_data = cctx;
-+        return;
-+    }
-+    if (ev == MG_EV_CLOSE) {
-+        //fprintf(stderr, "MG_EV_CLOSE %p %p %p\n", ev_data, nc, nc->user_data);
-+        free(nc->user_data);
-+        nc->user_data = NULL;
-+        return;
-+    }
-+    if (!nc_server(nc)) {
-+        // the context allocation failed: no requests on this connection
-+        if (ev == MG_EV_HTTP_REQUEST || ev == MG_EV_WEBSOCKET_FRAME) {
-+            nc->flags |= MG_F_SEND_AND_CLOSE;
-+        }
-+        return;
-+    }
-+
-     switch (ev) {
-     case MG_EV_TIMER:
-         send_keep_alive(nc);
-         break;
-     case MG_EV_WEBSOCKET_HANDSHAKE_DONE: {
--        struct http_server_context *ctx = nc->user_data;
-+        struct http_server_context *ctx = nc_server(nc);
-         /* New websocket connection. Send meta. */
-         data_t *meta = meta_data(ctx->cfg);
-         data_output_print(ctx->output, meta);
-@@ -1165,15 +1244,12 @@
-         }
- #ifdef SERVE_STATIC
-         else {
--            struct http_server_context *ctx = nc->user_data;
-+            struct http_server_context *ctx = nc_server(nc);
-             mg_serve_http(nc, hm, ctx->server_opts); /* Serve static content */
-         }
- #endif
-         break;
-     }
--    case MG_EV_CLOSE:
--        //fprintf(stderr, "MG_EV_CLOSE %p %p %p\n", ev_data, nc, nc->user_data);
--        break;
-     default:
-         break;
-     }
-@@ -1198,21 +1274,26 @@
-         free(ring_list_push(ctx->history, dup));
-     }
- 
-+    // Only to this server's subscribers: WebSockets and /events or /stream. Never the listener, whose
-+    // send buffer is never drained, and never plain HTTP connections, whose replies events would corrupt.
-     for (nc = mg_next(mgr, NULL); nc != NULL; nc = mg_next(mgr, nc)) {
--        if (nc->handler != ev_handler) {
-+        if (nc->handler != ev_handler || (nc->flags & MG_F_LISTENING)) {
-             continue;
-         }
- 
--        struct nc_context *cctx = nc->user_data; // might not be valid
-+        struct nc_context *cctx = nc->user_data;
-+        if (!cctx || cctx->server != ctx) {
-+            continue;
-+        }
-         if (is_websocket(nc)) {
-             mg_send_websocket_frame(nc, WEBSOCKET_OP_TEXT, msg, len);
-         }
--        else if (cctx && cctx->is_chunked) {
-+        else if (cctx->mode == NC_MODE_EVENTS) {
-             mg_send_http_chunk(nc, msg, len);
-             mg_send_http_chunk(nc, "\r\n", 2);
-             mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
-         }
--        else if (cctx && !cctx->is_chunked) {
-+        else if (cctx->mode == NC_MODE_STREAM) {
-             mg_send(nc, msg, len);
-             mg_send(nc, "\r\n", 2);
-             mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
-@@ -1271,6 +1352,14 @@
- 
- #define SHUTDOWN_JSON "{\"shutdown\":\"goodbye\"}"
- 
-+// A stopped server's connections only flush what is queued (the goodbye) and close: nothing of ours runs
-+static void stopped_handler(struct mg_connection *nc, int ev, void *ev_data)
-+{
-+    UNUSED(nc);
-+    UNUSED(ev);
-+    UNUSED(ev_data);
-+}
-+
- static int http_server_stop(struct http_server_context *ctx)
- {
-     if (!ctx) {
-@@ -1279,28 +1368,38 @@
- 
-     // close the server
-     ctx->conn->user_data = NULL;
-+    ctx->conn->handler   = stopped_handler;
-     ctx->conn->flags |= MG_F_CLOSE_IMMEDIATELY;
- 
-     // close connections with a goodbye
-     struct mg_mgr *mgr = ctx->conn->mgr;
-     for (struct mg_connection *nc = mg_next(mgr, NULL); nc != NULL; nc = mg_next(mgr, nc)) {
--        if (nc->handler != ev_handler) {
-+        if (nc->handler != ev_handler || (nc->flags & MG_F_LISTENING)) {
-             continue;
-         }
- 
--        struct nc_context *cctx = nc->user_data; // might not be valid
-+        struct nc_context *cctx = nc->user_data;
-+        if (!cctx || cctx->server != ctx) {
-+            continue;
-+        }
-         if (is_websocket(nc)) {
-             mg_send_websocket_frame(nc, WEBSOCKET_OP_TEXT, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
-         }
--        else if (cctx && cctx->is_chunked) {
-+        else if (cctx->mode == NC_MODE_EVENTS) {
-             mg_send_http_chunk(nc, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
-             mg_send_http_chunk(nc, "\r\n", 2);
-             mg_send_http_chunk(nc, "", 0);            /* Send empty chunk, the end of response */
-         }
--        else if (cctx && !cctx->is_chunked) {
-+        else if (cctx->mode == NC_MODE_STREAM) {
-             mg_send(nc, SHUTDOWN_JSON, sizeof(SHUTDOWN_JSON) - 1);
-             mg_send(nc, "\r\n", 2);
-         }
-+        // ctx is freed below and the caller may free the rest before the next poll: close the connection
-+        // once the goodbye is out, and let nothing of ours run on it again
-+        nc->flags |= MG_F_SEND_AND_CLOSE;
-+        nc->handler   = stopped_handler;
-+        nc->user_data = NULL;
-+        free(cctx);
-     }
- 
-     for (void **iter = ring_list_iter(ctx->history); iter; iter = ring_list_next(ctx->history, iter))
 diff --git a/idf/rtl433_core/src/logger.c b/idf/rtl433_core/src/logger.c
+index dce0404b..84132098 100644
 --- a/idf/rtl433_core/src/logger.c
 +++ b/idf/rtl433_core/src/logger.c
-@@ -31,12 +31,22 @@
+@@ -31,12 +31,22 @@ void r_logger_set_log_handler(r_logger_handler const handler, void *userdata)
  
  void print_log(log_level_t level, char const *src, char const *msg)
  {
@@ -538,9 +117,10 @@ diff --git a/idf/rtl433_core/src/logger.c b/idf/rtl433_core/src/logger.c
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
 diff --git a/idf/rtl433_core/src/output_rtltcp.c b/idf/rtl433_core/src/output_rtltcp.c
+index 5bbd5ec8..6d0cb2d5 100644
 --- a/idf/rtl433_core/src/output_rtltcp.c
 +++ b/idf/rtl433_core/src/output_rtltcp.c
-@@ -168,6 +168,11 @@
+@@ -168,6 +168,11 @@ E.g. initialization from Gqrx:
  static int parse_command(r_cfg_t *cfg, int control, uint8_t const *buf, int len)
  {
      UNUSED(cfg);
@@ -553,9 +133,10 @@ diff --git a/idf/rtl433_core/src/output_rtltcp.c b/idf/rtl433_core/src/output_rt
      if (len < 5)
          return 0;
 diff --git a/idf/rtl433_core/src/pulse_detect.c b/idf/rtl433_core/src/pulse_detect.c
+index 718b5446..6266dc1f 100644
 --- a/idf/rtl433_core/src/pulse_detect.c
 +++ b/idf/rtl433_core/src/pulse_detect.c
-@@ -224,6 +224,13 @@
+@@ -224,6 +224,13 @@ void pulse_detect_retry_fsk(pulse_detect_t *s)
      }
  }
  
@@ -570,9 +151,10 @@ diff --git a/idf/rtl433_core/src/pulse_detect.c b/idf/rtl433_core/src/pulse_dete
  {
      if (s->pending_gap) {
 diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
+index fa9f0b1c..1ffa2d94 100644
 --- a/idf/rtl433_core/src/r_api.c
 +++ b/idf/rtl433_core/src/r_api.c
-@@ -86,20 +86,32 @@
+@@ -86,6 +86,10 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
      cfg->frequencies = 1;
      cfg->frequency_index = 0;
      cfg->frequency[0] = center_freq;
@@ -583,25 +165,15 @@ diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
      // cfg->center_frequency = center_freq; // actually applied in the sdr event
      sdr_set_center_freq(cfg->dev, center_freq, 1);
  }
- 
--void set_freq_correction(r_cfg_t *cfg, int freq_correction)
-+int set_freq_correction(r_cfg_t *cfg, int freq_correction)
+@@ -105,10 +109,15 @@ int set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
  {
--    // cfg->ppm_error = freq_correction; // actually applied in the sdr event
--    sdr_set_freq_correction(cfg->dev, freq_correction, 0);
-+    int r = sdr_set_freq_correction(cfg->dev, freq_correction, 0);
-+    if (r >= 0) {
-+        // what get_ppm_error reports, and what start_sdr() applies when the input restarts
-+        cfg->ppm_error = freq_correction;
-+    }
-+    return r;
- }
- 
--void set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
-+int set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
- {
+     if (!cfg->dev) {
+         cfg->samp_rate = sample_rate; // no device open: start_sdr() applies it when one is
++        cfg->hop_rates = 0;           // a rate set by hand applies to every band
+         return 0;
+     }
      // cfg->samp_rate = sample_rate; // actually applied in the sdr event
--    sdr_set_sample_rate(cfg->dev, sample_rate, 0);
+-    return sdr_set_sample_rate(cfg->dev, sample_rate, 0);
 +    int r = sdr_set_sample_rate(cfg->dev, sample_rate, 0);
 +    if (r >= 0) {
 +        cfg->hop_rates = 0; // a rate set by hand applies to every band (a refused one changes nothing)
@@ -610,51 +182,7 @@ diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
  }
  
  void set_gain_str(struct r_cfg *cfg, char const *gain_str)
-@@ -132,21 +144,22 @@
-     list_ensure_size(&cfg->output_handler, 16);
- 
-     // collect devices list, this should be a module
--    r_device r_devices[] = {
--#define DECL(name) name,
-+    // (a table of pointers: copying the 388 r_device values into a local would be a 43 KB stack frame)
-+    static r_device const *const r_devices[] = {
-+#define DECL(name) &name,
-             DEVICES
- #undef DECL
-     };
- 
-     cfg->num_r_devices = sizeof(r_devices) / sizeof(*r_devices);
--    for (unsigned i = 0; i < cfg->num_r_devices; i++) {
--        r_devices[i].protocol_num = i + 1;
--    }
--    cfg->devices = malloc(sizeof(r_devices));
-+    cfg->devices = malloc(cfg->num_r_devices * sizeof(r_device));
-     if (!cfg->devices)
-         FATAL_CALLOC("r_init_cfg()");
- 
--    memcpy(cfg->devices, r_devices, sizeof(r_devices));
-+    for (int i = 0; i < cfg->num_r_devices; i++) {
-+        cfg->devices[i] = *r_devices[i];
-+        cfg->devices[i].protocol_num = i + 1;
-+    }
- 
-     cfg->demod = calloc(1, sizeof(*cfg->demod));
-     if (!cfg->demod)
-@@ -188,6 +201,13 @@
-     return cfg;
- }
- 
-+static void silenced_handler(struct mg_connection *nc, int ev, void *ev_data)
-+{
-+    (void)nc;
-+    (void)ev;
-+    (void)ev_data;
-+}
-+
- void r_free_cfg(r_cfg_t *cfg)
- {
-     if (cfg->dev) {
-@@ -230,12 +250,20 @@
+@@ -247,6 +256,7 @@ void r_free_cfg(r_cfg_t *cfg)
  
      list_free_elems(&cfg->in_files, NULL);
  
@@ -662,20 +190,7 @@ diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
      free(cfg->demod);
      cfg->demod = NULL;
  
-     free(cfg->devices);
-     cfg->devices = NULL;
- 
-+    // mg_mgr_free() polls once more and then closes every connection through its handler, but the state
-+    // those handlers use (outputs, the demod, cfg's timer) is freed by now: silence them first
-+    if (cfg->mgr) {
-+        for (struct mg_connection *nc = mg_next(cfg->mgr, NULL); nc != NULL; nc = mg_next(cfg->mgr, nc)) {
-+            nc->handler = silenced_handler;
-+        }
-+    }
-     mg_mgr_free(cfg->mgr);
-     free(cfg->mgr);
-     cfg->mgr = NULL;
-@@ -702,6 +730,8 @@
+@@ -726,6 +736,8 @@ void r_redirect_logging(r_cfg_t *cfg)
  /** Pass the data structure to all output handlers. Frees data afterwards. */
  void event_occurred_handler(r_cfg_t *cfg, data_t *data)
  {
@@ -684,7 +199,7 @@ diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
      // prepend "time" if requested
      if (cfg->report_time != REPORT_TIME_OFF) {
          char time_str[LOCAL_TIME_BUFLEN];
-@@ -753,9 +783,16 @@
+@@ -777,9 +789,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
  }
  
  /** Pass the data structure to all output handlers. Frees data afterwards. */
@@ -702,9 +217,10 @@ diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
  #ifndef NDEBUG
      // check for undeclared csv fields
 diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
+index 4ec3fc2d..f338963c 100644
 --- a/idf/rtl433_core/src/r_flow.c
 +++ b/idf/rtl433_core/src/r_flow.c
-@@ -70,7 +70,17 @@
+@@ -70,7 +70,17 @@ Flush the SDR IQ data frame processing, e.g. on the end of a input file.
  */
  int flush_sdr_flow(r_cfg_t *cfg)
  {
@@ -723,7 +239,7 @@ diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
  }
  
  /**
-@@ -104,6 +114,13 @@
+@@ -104,6 +114,13 @@ void reset_sdr_flow(r_cfg_t *cfg)
      }
      lora_fft_demod_reset(demod->lora_fft_demod);
      lora_fm_demod_reset(demod->lora_fm_demod);
@@ -737,7 +253,7 @@ diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
  }
  
  /// FSK pulse detectors to run, in the order their packages are tried.
-@@ -370,6 +387,30 @@
+@@ -370,6 +387,30 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
          return 0; // ignore the data
      }
  
@@ -768,7 +284,7 @@ diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
      unsigned n_samples = len / demod->sample_size;
      if (n_samples * demod->sample_size != len) {
          print_log(LOG_WARNING, __func__, "Sample buffer length not aligned to sample size!");
-@@ -395,6 +436,7 @@
+@@ -395,6 +436,7 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
  
      // Feed data to all raw outputs (e.g. rtl_tcp)
      // do this here and not in sdr_handler so realtime replay can use rtl_tcp output
@@ -776,7 +292,7 @@ diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
      for (void **iter = demod->raw_handler->elems; iter && *iter; ++iter) {
          raw_output_t *output = *iter;
          raw_output_frame(output, iq_buf, len);
-@@ -404,11 +446,11 @@
+@@ -404,11 +446,11 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
      time_t last_frame_sec = demod->now.tv_sec;
      get_time_now(&demod->now);
  
@@ -791,7 +307,7 @@ diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
          demod->frame_end_ago += n_samples;
      }
  
-@@ -443,6 +485,51 @@
+@@ -443,6 +485,56 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
      int noise_only = avg_db < demod->noise_level + 3.0f; // or demod->min_level_auto?
      // always process frames if loader, dumper, or analyzers are in use, otherwise skip silent frames
      process_frame = demod->squelch_offset <= 0 || !noise_only || demod->load_info.format || demod->analyze_pulses || demod->dumper.len || demod->samp_grab;
@@ -826,7 +342,12 @@ diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
 +        if (demod->squelch_prev_cap < len) {
 +            free(demod->squelch_prev_iq);
 +            demod->squelch_prev_iq  = malloc(len);
-+            demod->squelch_prev_cap = demod->squelch_prev_iq ? len : 0;
++            if (!demod->squelch_prev_iq) {
++                demod->squelch_prev_cap = 0; // no look-behind this piece, try again next one
++            }
++            else {
++                demod->squelch_prev_cap = len;
++            }
 +        }
 +        if (demod->squelch_prev_iq) {
 +            if (!process_frame) // a processed piece is never replayed: skip the copy
@@ -843,7 +364,7 @@ diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
      demod->total_frames_count += 1;
      if (noise_only) {
          demod->total_frames_squelch += 1;
-@@ -458,6 +545,9 @@
+@@ -458,6 +550,9 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
      } else {
          demod->noise_level = (demod->noise_level * 31 + avg_db) / 32; // slow rise over 32 frames
      }
@@ -853,7 +374,7 @@ diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
      // Report noise every report_noise seconds, but only for the first frame that second
      if (demod->report_noise && last_frame_sec != demod->now.tv_sec && demod->now.tv_sec % demod->report_noise == 0) {
          print_logf(LOG_WARNING, "Auto Level", "Current %s level %.1f dB, estimated noise %.1f dB",
-@@ -850,7 +940,13 @@
+@@ -850,7 +945,13 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
          }
      }
  
@@ -868,71 +389,8 @@ diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
 +#endif
      return d_events;
  }
-diff --git a/idf/rtl433_core/src/r_util.c b/idf/rtl433_core/src/r_util.c
---- a/idf/rtl433_core/src/r_util.c
-+++ b/idf/rtl433_core/src/r_util.c
-@@ -23,6 +23,30 @@
-     }
- }
- 
-+#ifdef ESP_PLATFORM
-+/* ESP port: the ESP-IDF libc's strftime("%z") prints +0000 even with TZ set (localtime_r does
-+   apply the zone), so events went out as local time labelled Z. Derive the offset instead. */
-+static void format_tz_offset(char *buf, size_t len, time_t t, struct tm const *lt)
-+{
-+    struct tm g;
-+    gmtime_r(&t, &g);
-+    long days = lt->tm_yday - g.tm_yday;
-+    if (lt->tm_year != g.tm_year) {
-+        days = lt->tm_year > g.tm_year ? 1 : -1;
-+    }
-+    long off = ((days * 24 + lt->tm_hour - g.tm_hour) * 60 + lt->tm_min - g.tm_min) * 60 + lt->tm_sec - g.tm_sec;
-+    if (off == 0) {
-+        snprintf(buf, len, "Z");
-+        return;
-+    }
-+    char sign = off < 0 ? '-' : '+';
-+    if (off < 0) {
-+        off = -off;
-+    }
-+    snprintf(buf, len, "%c%02ld%02ld", sign, off / 3600, (off % 3600) / 60);
-+}
-+#endif
-+
- char *format_time_str(char *buf, char const *format, int with_tz, time_t time_secs)
- {
-     time_t etime;
-@@ -47,10 +71,14 @@
- 
-     size_t l = strftime(buf, LOCAL_TIME_BUFLEN, format, &tm_info);
-     if (with_tz) {
-+#ifdef ESP_PLATFORM
-+        format_tz_offset(buf + l, LOCAL_TIME_BUFLEN - l, etime, &tm_info);
-+#else
-         strftime(buf + l, LOCAL_TIME_BUFLEN - l, "%z", &tm_info);
-         if (!strcmp(buf + l, "+0000")) {
-             strcpy(buf + l, "Z"); // NOLINT
-         }
-+#endif
-     }
-     return buf;
- }
-@@ -79,10 +107,14 @@
-     size_t l = strftime(buf, LOCAL_TIME_BUFLEN, format, &tm_info);
-     l += snprintf(buf + l, LOCAL_TIME_BUFLEN - l, ".%06ld", (long)tv->tv_usec);
-     if (with_tz) {
-+#ifdef ESP_PLATFORM
-+        format_tz_offset(buf + l, LOCAL_TIME_BUFLEN - l, t_secs, &tm_info);
-+#else
-         strftime(buf + l, LOCAL_TIME_BUFLEN - l, "%z", &tm_info);
-         if (!strcmp(buf + l, "+0000")) {
-             strcpy(buf + l, "Z"); // NOLINT
-         }
-+#endif
-     }
-     return buf;
- }
 diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
+index 644b70aa..76731358 100644
 --- a/idf/rtl433_core/src/rtl_433.c
 +++ b/idf/rtl433_core/src/rtl_433.c
 @@ -29,6 +29,9 @@
@@ -945,38 +403,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
  #include "r_private.h"
  #include "r_device.h"
  #include "r_api.h"
-@@ -383,11 +386,20 @@
-     exit(0);
- }
- 
-+#ifdef ESP_RTL_SDR
-+// newlib's getopt only fully re-initialises (its internal scan position too) when optind is 0; with
-+// optind = 1 the first call re-reads argv[1][0] ('-') as an option character and prints
-+// "invalid option -- `--'". glibc treats 1 as a full reset, which is why upstream uses it.
-+#define GETOPT_RESET 0
-+#else
-+#define GETOPT_RESET 1
-+#endif
-+
- static int hasopt(int test, int argc, char *argv[], char const *optstring)
- {
-     int opt;
- 
--    optind = 1; // reset getopt
-+    optind = GETOPT_RESET; // reset getopt
-     while ((opt = getopt(argc, argv, optstring)) != -1) {
-         if (opt == test || optopt == test) {
-             return opt;
-@@ -482,7 +494,7 @@
- {
-     int opt;
- 
--    optind = 1; // reset getopt
-+    optind = GETOPT_RESET; // reset getopt
-     while ((opt = getopt(argc, argv, OPTSTRING)) != -1) {
-         if (opt == '?') {
-             opt = optopt; // allow missing arguments
-@@ -596,6 +608,10 @@
+@@ -604,6 +607,10 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
          break;
      case 's':
          cfg->samp_rate = atouint32_metric(arg, "-s: ");
@@ -987,7 +414,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
          break;
      case 'b':
          cfg->out_block_size = atouint32_metric(arg, "-b: ");
-@@ -1107,6 +1123,11 @@
+@@ -1115,6 +1122,11 @@ static void sighandler(int signum)
  }
  #endif
  
@@ -999,7 +426,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
  /**
  Process an IQ data frame with push_sdr_flow() and run side effects.
  
-@@ -1206,8 +1227,30 @@
+@@ -1214,8 +1226,30 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
      if (cfg->hop_now && !cfg->exit_async) {
          cfg->hop_now = 0;
          time(&cfg->hop_start_time);
@@ -1030,7 +457,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
      }
  }
  
-@@ -1265,6 +1308,19 @@
+@@ -1273,6 +1307,19 @@ static void sdr_handler(struct mg_connection *nc, int ev_type, void *ev_data)
      }
  
      if (ev->ev == SDR_EV_DATA) {
@@ -1050,24 +477,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
          cfg->samp_rate        = ev->sample_rate;
          cfg->center_frequency = ev->center_frequency;
  
-@@ -1319,6 +1375,7 @@
- {
-     int r;
-     if (cfg->dev) {
-+        cfg->dev_info = NULL; // owned by the dev: do not leave it dangling if the reopen fails
-         r = sdr_close(cfg->dev);
-         cfg->dev = NULL;
-         if (r < 0) {
-@@ -1329,11 +1386,20 @@
-     if (r < 0) {
-         return -1; // exit(2);
-     }
-+    // A reopened device (a replug, a watchdog restart) often comes back at the same rate and frequency,
-+    // so process_sdr_frame() sees no change and flushes nothing: start the filters, the pulse detector
-+    // and the squelch from scratch rather than carry a half-seen pulse across the gap
-+    reset_sdr_flow(cfg);
-     cfg->dev_info = sdr_get_dev_info(cfg->dev);
-     cfg->demod->sample_size = sdr_get_sample_size(cfg->dev);
+@@ -1347,6 +1394,11 @@ static int start_sdr(r_cfg_t *cfg)
      // cfg->demod->sample_signed = sdr_get_sample_signed(cfg->dev);
  
      /* Set the sample rate */
@@ -1079,16 +489,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
      sdr_set_sample_rate(cfg->dev, cfg->samp_rate, 1); // always verbose
  
      if (cfg->verbosity || cfg->demod->level_limit < 0.0) {
-@@ -1360,7 +1426,7 @@
-         print_log(LOG_NOTICE, "Input", "Reading samples in async mode...");
-     }
- 
--    sdr_set_center_freq(cfg->dev, cfg->center_frequency, 1); // always verbose
-+    sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1); // not center_frequency: that is the last band that delivered data, stale after a failed hop or a retune made while the dongle was away
- 
-     r = sdr_start(cfg->dev, acquire_callback, (void *)get_mgr(cfg),
-             DEFAULT_ASYNC_BUF_NUMBER, cfg->out_block_size);
-@@ -1463,6 +1529,24 @@
+@@ -1478,6 +1530,24 @@ static void timer_handler(struct mg_connection *nc, int ev, void *ev_data)
      }
  }
  
@@ -1113,7 +514,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
  int main(int argc, char **argv) {
      int r = 0;
      struct dm_state *demod;
-@@ -1472,6 +1556,9 @@
+@@ -1487,6 +1557,9 @@ int main(int argc, char **argv) {
      sdr_redirect_logging();
  
      r_init_cfg(cfg);
@@ -1123,7 +524,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
  
      setbuf(stdout, NULL);
      setbuf(stderr, NULL);
-@@ -1550,6 +1637,9 @@
+@@ -1565,6 +1638,9 @@ int main(int argc, char **argv) {
      if (!cfg->no_default_devices) {
          register_all_protocols(cfg, 0); // register all defaults
      }
@@ -1133,7 +534,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
  
      // check if we need FM demod
      for (void **iter = demod->r_devs.elems; iter && *iter; ++iter) {
-@@ -1941,6 +2031,14 @@
+@@ -1956,6 +2032,14 @@ int main(int argc, char **argv) {
      if (cfg->dev_mode != DEVICE_MODE_MANUAL) {
          r = start_sdr(cfg);
          if (r < 0) {
@@ -1148,7 +549,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
              exit(2);
          }
      }
-@@ -1960,6 +2058,9 @@
+@@ -1975,6 +2059,9 @@ int main(int argc, char **argv) {
  
      while (!cfg->exit_async) {
          mg_mgr_poll(cfg->mgr, 500);
@@ -1159,6 +560,7 @@ diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
      if (cfg->verbosity >= LOG_INFO) {
          print_log(LOG_INFO, "rtl_433", "stopping...");
 diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
+index cef79752..b23d729b 100644
 --- a/idf/rtl433_core/src/sdr.c
 +++ b/idf/rtl433_core/src/sdr.c
 @@ -24,6 +24,13 @@
@@ -1175,7 +577,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef RTLSDR
  #include <rtl-sdr.h>
  #if defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
-@@ -95,6 +102,18 @@
+@@ -95,6 +102,18 @@ struct sdr_dev {
      void *rtlsdr_cb_ctx;
  #endif
  
@@ -1194,7 +596,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
      char *dev_info;
  
      int running;
-@@ -1131,6 +1150,417 @@
+@@ -1131,6 +1150,421 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
  
  #endif
  
@@ -1366,9 +768,13 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
 +
 +    size_t info_len = 41 + strlen(info.manufacturer) + strlen(info.product) + strlen(info.serial);
 +    dev->dev_info = malloc(info_len);
-+    if (dev->dev_info)
++    if (!dev->dev_info) {
++        WARN_MALLOC("esp_sdr_open()"); // dev_info stays NULL: get_dev_info reports none
++    }
++    else {
 +        snprintf(dev->dev_info, info_len, "{\"vendor\":\"%s\", \"product\":\"%s\", \"serial\":\"%s\"}",
 +                info.manufacturer, info.product, info.serial);
++    }
 +
 +    pthread_mutex_lock(&esp_active_lock);
 +    esp_active = dev->esp_dev;
@@ -1612,7 +1018,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  /* Public API */
  
  int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
-@@ -1138,6 +1568,11 @@
+@@ -1138,6 +1572,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
      if (dev_query && !strncmp(dev_query, "rtl_tcp", 7))
          return rtltcp_open(out_dev, dev_query, verbose);
  
@@ -1624,7 +1030,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #if !defined(RTLSDR) && !defined(SOAPYSDR)
      if (verbose)
          print_log(LOG_ERROR, __func__, "No input drivers (RTL-SDR or SoapySDR) compiled in.");
-@@ -1177,6 +1612,18 @@
+@@ -1177,6 +1616,18 @@ int sdr_close(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          ret = rtltcp_close(dev->rtl_tcp);
  
@@ -1643,7 +1049,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          ret = SoapySDRDevice_unmake(dev->soapy_dev);
-@@ -1227,11 +1674,20 @@
+@@ -1227,10 +1678,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1659,12 +1065,11 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
- #endif
 +#endif
+ #endif
  
      int r = -1;
- 
-@@ -1240,6 +1696,14 @@
+@@ -1240,6 +1700,14 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ, freq);
      }
  
@@ -1679,7 +1084,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef SOAPYSDR
      SoapySDRKwargs args = {0};
      if (dev->soapy_dev) {
-@@ -1261,10 +1725,16 @@
+@@ -1261,10 +1729,16 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
              print_logf(LOG_NOTICE, "SDR", "Tuned to %s.", nice_freq(sdr_get_center_freq(dev)));
      }
  
@@ -1696,7 +1101,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef THREADS
      pthread_mutex_unlock(&dev->lock);
  #endif
-@@ -1280,6 +1750,14 @@
+@@ -1280,6 +1754,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_freq;
  
@@ -1711,7 +1116,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getFrequency(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1299,17 +1777,33 @@
+@@ -1299,10 +1781,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1727,11 +1132,11 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
- #endif
 +#endif
+ #endif
  
      int r = -1;
- 
+@@ -1310,6 +1801,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ_CORRECTION, ppm);
  
@@ -1745,7 +1150,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setFrequencyComponent(dev->soapy_dev, SOAPY_SDR_RX, 0, "CORR", (double)ppm, NULL);
-@@ -1338,17 +1832,35 @@
+@@ -1338,10 +1836,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1761,11 +1166,11 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
- #endif
 +#endif
+ #endif
  
      int r = -1;
- 
+@@ -1349,6 +1856,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_GAIN_MODE, 0);
  
@@ -1781,7 +1186,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = soapysdr_auto_gain(dev->soapy_dev, verbose);
-@@ -1374,11 +1886,20 @@
+@@ -1374,10 +1890,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1797,12 +1202,11 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
- #endif
 +#endif
+ #endif
  
      int r = -1;
- 
-@@ -1404,6 +1925,17 @@
+@@ -1404,6 +1929,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
                  || rtltcp_command(dev, RTLTCP_SET_GAIN, gain);
      }
  
@@ -1820,7 +1224,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef RTLSDR
      /* Enable manual gain */
      r = rtlsdr_set_tuner_gain_mode(dev->rtlsdr_dev, 1);
-@@ -1480,11 +2012,20 @@
+@@ -1480,10 +2016,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          return -1;
  
  #ifdef THREADS
@@ -1836,12 +1240,11 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
- #endif
 +#endif
+ #endif
  
      int r = -1;
- 
-@@ -1493,6 +2034,42 @@
+@@ -1493,6 +2038,42 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
          r = rtltcp_command(dev, RTLTCP_SET_SAMPLE_RATE, rate);
      }
  
@@ -1884,7 +1287,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0, (double)rate);
-@@ -1510,10 +2087,16 @@
+@@ -1510,10 +2091,16 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
              print_logf(LOG_NOTICE, "SDR", "Sample rate set to %u S/s.", sdr_get_sample_rate(dev)); // Unfortunately, doesn't return real rate
      }
  
@@ -1901,7 +1304,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef THREADS
      pthread_mutex_unlock(&dev->lock);
  #endif
-@@ -1529,6 +2112,11 @@
+@@ -1529,6 +2116,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
      if (dev->rtl_tcp)
          return dev->rtl_tcp_rate;
  
@@ -1913,7 +1316,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1553,6 +2141,30 @@
+@@ -1553,6 +2145,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
      if (!sdr_settings || !*sdr_settings)
          return 0;
  
@@ -1944,7 +1347,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
      if (dev->rtl_tcp) {
          while (sdr_settings && *sdr_settings) {
              char const *val = NULL;
-@@ -1726,6 +2338,11 @@
+@@ -1726,6 +2342,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
      if (dev->rtl_tcp)
          return rtltcp_read_loop(dev, cb, ctx, buf_num, buf_len);
  
@@ -1956,7 +1359,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return soapysdr_read_loop(dev, cb, ctx, buf_num, buf_len);
-@@ -1749,6 +2366,13 @@
+@@ -1749,6 +2370,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
          return 0;
      }
  
@@ -1970,7 +1373,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
  #ifdef SOAPYSDR
      if (dev->soapy_dev) {
          dev->running = 0;
-@@ -1787,6 +2411,9 @@
+@@ -1787,6 +2415,9 @@ void sdr_redirect_logging(void)
  static THREAD_RETURN THREAD_CALL acquire_thread(void *arg)
  {
      sdr_dev_t *dev = arg;
@@ -1980,7 +1383,7 @@ diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
      print_log(LOG_DEBUG, __func__, "acquire_thread enter...");
  
      int r = sdr_start_sync(dev, dev->async_cb, dev->async_ctx, dev->buf_num, dev->buf_len);
-@@ -1838,10 +2465,19 @@
+@@ -1838,10 +2469,19 @@ int sdr_stop(sdr_dev_t *dev)
      if (!dev)
          return -1;
  
