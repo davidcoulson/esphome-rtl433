@@ -24,6 +24,8 @@
 #include "r_device.h"
 #include "pulse_slicer.h"
 #include "pulse_detect_fsk.h"
+#include "bitbuffer.h"
+#include "decoder_util.h"
 #include "sdr.h"
 #include "data.h"
 #include "data_tag.h"
@@ -171,6 +173,12 @@ void r_init_cfg(r_cfg_t *cfg)
 
     // note: this should be optional
     cfg->demod->pulse_detect = pulse_detect_create();
+    for (unsigned i = 0; i < FSK_PULSE_DETECTOR_COUNT; ++i) {
+        pulse_detect_fsk_init(&cfg->demod->pulse_detect_fsk[i]);
+    }
+    cfg->demod->lora_fm_demod = lora_fm_demod_create();
+    if (!cfg->demod->lora_fm_demod)
+        FATAL_CALLOC("lora_fm_demod_create()");
     // initialize tables
     baseband_init();
 
@@ -226,6 +234,11 @@ void r_free_cfg(r_cfg_t *cfg)
 
     pulse_detect_free(cfg->demod->pulse_detect);
     cfg->demod->pulse_detect = NULL;
+
+    lora_fft_demod_free(cfg->demod->lora_fft_demod);
+    cfg->demod->lora_fft_demod = NULL;
+    lora_fm_demod_free(cfg->demod->lora_fm_demod);
+    cfg->demod->lora_fm_demod = NULL;
 
     list_free_elems(&cfg->raw_handler, (list_elem_free_fn)raw_output_free);
 
@@ -365,7 +378,8 @@ char *time_pos_str(r_cfg_t *cfg, unsigned samples_ago, char *buf)
 // well-known field "tag" is only used when output tagging is requested
 // well-known field "protocol" is only used when model protocol is requested
 // well-known field "description" is only used when model description is requested
-// well-known fields "mod", "freq", "freq1", "freq2", "rssi", "snr", "noise" are used by meta report option
+// well-known fields "mod", "freq", "freq1", "freq2", "rssi", "snr", "noise",
+// "sf", "bw", "cr", and "sync" are used by the meta report option
 char const **well_known_output_fields(r_cfg_t *cfg)
 {
     list_t field_list = {0};
@@ -400,6 +414,10 @@ char const **well_known_output_fields(r_cfg_t *cfg)
         list_push(&field_list, "rssi");
         list_push(&field_list, "snr");
         list_push(&field_list, "noise");
+        list_push(&field_list, "sf");
+        list_push(&field_list, "bw");
+        list_push(&field_list, "cr");
+        list_push(&field_list, "sync");
     }
 
     return (char const **)field_list.elems;
@@ -517,6 +535,7 @@ int run_ook_demods(list_t *r_devs, pulse_data_t *pulse_data)
             case FSK_PULSE_PCM:
             case FSK_PULSE_PWM:
             case FSK_PULSE_MANCHESTER_ZEROBIT:
+            case LORA:
                 break;
             default:
                 fprintf(stderr, "Unknown modulation %u in protocol!\n", r_dev->modulation);
@@ -568,6 +587,8 @@ int run_fsk_demods(list_t *r_devs, pulse_data_t *fsk_pulse_data)
             case FSK_PULSE_MANCHESTER_ZEROBIT:
                 p_events += pulse_slicer_manchester_zerobit(fsk_pulse_data, r_dev);
                 break;
+            case LORA:
+                break;
             default:
                 fprintf(stderr, "Unknown modulation %u in protocol!\n", r_dev->modulation);
             }
@@ -575,6 +596,96 @@ int run_fsk_demods(list_t *r_devs, pulse_data_t *fsk_pulse_data)
     }
 
     return p_events;
+}
+
+int get_lora_params(list_t *r_devs, unsigned *spreading_factor,
+        uint32_t *bandwidth, unsigned *sync_word)
+{
+    int found = 0;
+    for (void **iter = r_devs->elems; iter && *iter; ++iter) {
+        r_device const *r_dev = *iter;
+        if (r_dev->modulation == LORA) {
+            if (!found) {
+                *spreading_factor = r_dev->lora_spreading_factor;
+                *bandwidth = r_dev->lora_bandwidth;
+                *sync_word = r_dev->lora_sync_word;
+                found = 1;
+            }
+            else {
+                if (*spreading_factor != r_dev->lora_spreading_factor) {
+                    *spreading_factor = 0;
+                }
+                if (*bandwidth != r_dev->lora_bandwidth) {
+                    *bandwidth = 0;
+                }
+                if (*sync_word != r_dev->lora_sync_word) {
+                    *sync_word = 0;
+                }
+            }
+        }
+    }
+    return found;
+}
+
+static int account_lora_event(r_device *device, bitbuffer_t *bits)
+{
+    int ret = device->decode_fn ? device->decode_fn(device, bits) : 0;
+    device->decode_events += 1;
+    if (ret > 0) {
+        device->decode_ok += 1;
+        device->decode_messages += ret;
+    }
+    else if (ret >= DECODE_FAIL_SANITY) {
+        device->decode_fails[-ret] += 1;
+        ret = 0;
+    }
+    else {
+        print_logf(LOG_ERROR, __func__, "Decoder \"%s\" gave invalid return value %d: notify maintainer",
+                device->name, ret);
+        exit(1);
+    }
+
+    if (!device->decode_fn || (device->verbose && ret > 0) || device->verbose > 1) {
+        decoder_log_bitbuffer(device, ret > 0 ? 1 : 2, __func__, bits, device->name);
+    }
+    return ret;
+}
+
+int run_lora_demods(list_t *r_devs, uint8_t const *payload,
+        unsigned payload_len, unsigned spreading_factor,
+        uint32_t bandwidth, unsigned sync_word)
+{
+    bitbuffer_t bits = {0};
+    bits.num_rows = 1;
+    // Long payloads spill over into the following rows, see BITBUF_MAX_ROW_BITS.
+    if (payload_len > sizeof(bits.bb)) {
+        payload_len = sizeof(bits.bb);
+    }
+    bits.bits_per_row[0] = payload_len * 8;
+    memcpy(bits.bb, payload, payload_len);
+
+    int events = 0;
+    unsigned next_priority = 0;
+    for (unsigned priority = 0; !events && priority < UINT_MAX; priority = next_priority) {
+        next_priority = UINT_MAX;
+        for (void **iter = r_devs->elems; iter && *iter; ++iter) {
+            r_device *r_dev = *iter;
+            if (r_dev->priority > priority && r_dev->priority < next_priority) {
+                next_priority = r_dev->priority;
+            }
+            if (r_dev->priority != priority || r_dev->modulation != LORA
+                    || (r_dev->lora_spreading_factor
+                            && r_dev->lora_spreading_factor != spreading_factor)
+                    || (r_dev->lora_bandwidth
+                            && r_dev->lora_bandwidth != bandwidth)
+                    || (r_dev->lora_sync_word
+                            && r_dev->lora_sync_word != sync_word)) {
+                continue;
+            }
+            events += account_lora_event(r_dev, &bits);
+        }
+    }
+    return events;
 }
 
 /* handlers */
@@ -636,6 +747,19 @@ void event_occurred_handler(r_cfg_t *cfg, data_t *data)
     data_free(data);
 }
 
+/// Samples since the start of the package a decoder decoded from.
+/// An FSK package can start later than its OOK envelope package, e.g. after a lead-in.
+static unsigned package_start_ago(r_cfg_t const *cfg, r_device const *r_dev)
+{
+    if (r_dev->modulation >= LORA_DEMOD_MIN_VAL) {
+        return cfg->demod->lora_start_ago;
+    }
+    if (r_dev->modulation >= FSK_DEMOD_MIN_VAL) {
+        return cfg->demod->fsk_pulse_data.start_ago;
+    }
+    return cfg->demod->pulse_data.start_ago;
+}
+
 /** Pass the data structure to all output handlers. Frees data afterwards. */
 void log_device_handler(r_device *r_dev, int level, data_t *data)
 {
@@ -644,7 +768,7 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
     // prepend "time" if requested
     if (cfg->report_time != REPORT_TIME_OFF) {
         char time_str[LOCAL_TIME_BUFLEN];
-        time_pos_str(cfg, cfg->demod->pulse_data.start_ago, time_str);
+        time_pos_str(cfg, package_start_ago(cfg, r_dev), time_str);
         data = data_prepend(data,
                 data_str(NULL, "time", "", NULL, time_str));
     }
@@ -839,7 +963,18 @@ void data_acquired_handler(r_device *r_dev, data_t *data)
                 data_int(NULL, "protocol", "Protocol", NULL, r_dev->protocol_num));
     }
 
-    if (cfg->report_meta && cfg->demod->fsk_pulse_data.fsk_f2_est) {
+    if (cfg->report_meta && cfg->demod->lora_spreading_factor) {
+        char coding_rate[4];
+        snprintf(coding_rate, sizeof(coding_rate), "4/%u",
+                cfg->demod->lora_coding_rate + 4);
+        data = data_str(data, "mod",  "Modulation",       NULL,         "LoRa");
+        data = data_dbl(data, "freq", "Freq",             "%.1f MHz",   cfg->demod->center_frequency / 1000000.0);
+        data = data_int(data, "sf",   "Spreading factor", NULL,         cfg->demod->lora_spreading_factor);
+        data = data_dbl(data, "bw",   "Bandwidth",        "%.1f kHz",   cfg->demod->lora_bandwidth / 1000.0);
+        data = data_str(data, "cr",   "Coding rate",      NULL,         coding_rate);
+        data = data_int(data, "sync", "Sync word",        "0x%02x",     cfg->demod->lora_sync_word);
+    }
+    else if (cfg->report_meta && cfg->demod->fsk_pulse_data.fsk_f2_est) {
         data = data_str(data, "mod",   "Modulation",  NULL,         "FSK");
         data = data_dbl(data, "freq1", "Freq1",       "%.1f MHz",   cfg->demod->fsk_pulse_data.freq1_hz / 1000000.0);
         data = data_dbl(data, "freq2", "Freq2",       "%.1f MHz",   cfg->demod->fsk_pulse_data.freq2_hz / 1000000.0);
@@ -858,7 +993,7 @@ void data_acquired_handler(r_device *r_dev, data_t *data)
     // prepend "time" if requested
     if (cfg->report_time != REPORT_TIME_OFF) {
         char time_str[LOCAL_TIME_BUFLEN];
-        time_pos_str(cfg, cfg->demod->pulse_data.start_ago, time_str);
+        time_pos_str(cfg, package_start_ago(cfg, r_dev), time_str);
         data = data_prepend(data,
                 data_str(NULL, "time", "", NULL, time_str));
     }
@@ -1135,34 +1270,70 @@ void add_sr_dumper(r_cfg_t *cfg, char const *spec, int overwrite)
     cfg->sr_execopen = overwrite;
 }
 
+// Construct a file name if no base filename given
+static void generate_dumper_path(r_cfg_t *cfg, file_info_t const *dumper, char *path, unsigned path_size)
+{
+    char const *datatype = file_info_to_ext(dumper);
+    uint32_t freq_hz     = (cfg->frequencies == 0) ? DEFAULT_FREQUENCY : cfg->frequency[0];
+    double freq_mhz      = freq_hz / 1000000.0;
+    double rate_khz      = cfg->samp_rate / 1000.0;
+    for (unsigned cnt = 1;; ++cnt) {
+        // TODO: maybe use something like format_time_str(...);
+        snprintf(path, path_size, "rec%03u_%gM_%gk.%s", cnt, freq_mhz, rate_khz, datatype);
+        if (access(path, F_OK) == -1) {
+            break;
+        }
+    }
+}
+
 void reopen_dumpers(struct r_cfg *cfg)
 {
 #ifndef _WIN32
     for (void **iter = cfg->demod->dumper.elems; iter && *iter; ++iter) {
         file_info_t *dumper = *iter;
         if (dumper->file && (dumper->file != stdout)) {
+            // Construct a file name if no base filename given
+            char path_tmp[64]       = {0};
+            char const *dumper_path = dumper->path;
+            if (!dumper->path || !*dumper->path) {
+                generate_dumper_path(cfg, dumper, path_tmp, sizeof(path_tmp));
+                dumper_path = path_tmp;
+            }
+
             // Get current file inode
             struct stat old_st = {0};
             int ret = fstat(fileno(dumper->file), &old_st);
             if (ret) {
-                fprintf(stderr, "Failed to fstat %s (%d)\n", dumper->path, errno);
+                fprintf(stderr, "Failed to fstat %s (%d)\n", dumper_path, errno);
                 exit(1);
             }
 
             // Get new path inode if available
             struct stat new_st = {0};
-            stat(dumper->path, &new_st);
+            stat(dumper_path, &new_st);
             // ok for stat() to fail, the file might not exist
             if (old_st.st_ino == new_st.st_ino) {
                 continue;
             }
 
             // Reopen the file
-            print_logf(LOG_INFO, "Dumper", "Reopening \"%s\"", dumper->path);
-            fclose(dumper->file);
-            dumper->file = fopen(dumper->path, "wb");
+            print_logf(LOG_INFO, "Dumper", "Reopening \"%s\"", dumper_path);
+            if (dumper->container == FILEFMT_SIGMF) {
+                sigmf_t *sigmf =(sigmf_t *)dumper->file_aux;
+                sigmf_writer_close(sigmf);
+                int r = sigmf_writer_open(sigmf, dumper_path, 0);
+                if (r) {
+                    fprintf(stderr, "Failed to open %s\n", dumper_path);
+                    return;
+                }
+                dumper->file = sigmf->mtar.stream;
+            }
+            else {
+                fclose(dumper->file);
+                dumper->file = fopen(dumper_path, "wb");
+            }
             if (!dumper->file) {
-                fprintf(stderr, "Failed to open %s\n", dumper->path);
+                fprintf(stderr, "Failed to open %s\n", dumper_path);
                 exit(1);
             }
             if (dumper->format == VCD_LOGIC) {
@@ -1219,11 +1390,21 @@ void add_dumper(r_cfg_t *cfg, char const *spec, int overwrite)
     }
 
     file_info_t *dumper = calloc(1, sizeof(*dumper));
-    if (!dumper)
+    if (!dumper) {
         FATAL_CALLOC("add_dumper()");
+    }
     list_push(&cfg->demod->dumper, dumper);
 
     file_info_parse_filename(dumper, spec);
+
+    // Construct a file name if no base filename given
+    char path_tmp[64]  = {0};
+    if (!dumper->path || !*dumper->path) {
+        generate_dumper_path(cfg, dumper, path_tmp, sizeof(path_tmp));
+        file_info_parse_filename(dumper, path_tmp); // Note: this leaks path_buf
+        dumper->spec = spec; // restore original spec
+    }
+
     // Open the output
     if (dumper->container == FILEFMT_SIGMF) {
         sigmf_t *sigmf = calloc(1, sizeof(*sigmf));
@@ -1276,6 +1457,9 @@ void add_dumper(r_cfg_t *cfg, char const *spec, int overwrite)
             fprintf(stderr, "Failed to open %s\n", spec);
             exit(1);
         }
+    }
+    if (dumper->path == path_tmp) {
+        dumper->path = NULL; // don't leak the local string
     }
     if (dumper->format == VCD_LOGIC) {
         pulse_data_print_vcd_header(dumper->file, cfg->samp_rate);

@@ -86,6 +86,9 @@ CASES = [
         ("args", ["-Y", "autolevel"]),
         ("args", ["-Y", "squelch"]),
     ]),
+    ("detector fm_filter", {"detector": {"fm_filter": 0.2}}, [
+        ("args", ["-Y", "filter=0.2"]),
+    ]),
     ("gain, ppm, units", {"gain": 40, "ppm_error": -3, "units": "customary"}, [
         ("args", ["-g", "40"]),
         ("args", ["-p", "-3"]),
@@ -113,7 +116,10 @@ CASES = [
     ("rate in the 300k-900k gap is rejected", {"sample_rate": "500k"}, ("error", "sample_rate must be")),
     ("rate above 3.2M is rejected", {"sample_rate": "3300k"}, ("error", "sample_rate must be")),
     ("unknown decoder is rejected", {"decoders": ["not_a_decoder"]}, ("error", "unknown rtl_433 decoder")),
-    ("decoder number past the registry is rejected", {"decoders": [387]}, ("error", "at most 386")),
+    ("decoder number past the registry is rejected", {"decoders": [399]}, ("error", "at most 398")),
+    ("fm_filter auto is rejected", {"detector": {"fm_filter": "auto"}}, ("error", "expected float")),
+    ("fm_filter nan is rejected", {"detector": {"fm_filter": "nan"}}, ("error", "fm_filter must be")),
+    ("fm_filter zero is rejected", {"detector": {"fm_filter": 0}}, ("error", "fm_filter must be")),
     ("usb_buffer above the driver's 1 MB is rejected", {"usb_buffer": "2MB"}, ("error", "usb_buffer")),
     ("odd usb_buffer is rejected", {"usb_buffer": 100001}, ("error", "even number")),
     ("gain out of range is rejected", {"gain": 60}, ("error", "")),

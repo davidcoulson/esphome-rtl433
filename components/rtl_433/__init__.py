@@ -1,3 +1,4 @@
+import math
 import os
 from pathlib import Path
 
@@ -22,6 +23,9 @@ from esphome.const import (
 
 DEPENDENCIES = ["network"]
 AUTO_LOAD = ["sensor"]
+# esp_rtl_sdr installs the USB host library itself (and pins its own espressif/usb): a second owner makes the
+# install fail and nothing ever decodes
+CONFLICTS_WITH = ["usb_host"]
 CODEOWNERS = ["@davidcoulson"]
 
 CONF_FREQUENCIES = "frequencies"
@@ -121,6 +125,14 @@ def _bytes(value):
     return cv.int_(value)
 
 
+def _fm_filter(value):
+    # rtl_433 exit()s on a cutoff it cannot parse, which ends the decoding task at boot
+    value = cv.float_(value)
+    if not math.isfinite(value) or value <= 0:
+        raise cv.Invalid("fm_filter must be a positive number (microseconds 1-9999, Hz 10000+, or a ratio below 1)")
+    return value
+
+
 DETECTOR_SCHEMA = cv.Schema(
     {
         # -Y auto|classic|minmax: FSK pulse detector
@@ -138,7 +150,7 @@ DETECTOR_SCHEMA = cv.Schema(
         # -Y ampest|magest: amplitude or magnitude level estimator
         cv.Optional(CONF_LEVEL_ESTIMATOR): cv.one_of("amplitude", "magnitude", lower=True),
         # -Y filter=: FM low-pass cutoff to separate simultaneous transmissions (us 1-9999, Hz 10000+, or ratio)
-        cv.Optional(CONF_FM_FILTER): cv.string_strict,
+        cv.Optional(CONF_FM_FILTER): _fm_filter,
     }
 )
 

@@ -1,3 +1,1 @@
-merbanan/rtl_433 bd9073191aff109d7ea013bdcb921992b4f5a11f
-  + 58c1e46 "Fix Vevor-7in1 bytewise offset (#3691)" (src/devices/vevor_7in1.c only)
-  + 7649730 "Fix Flex symbol copy length in bytes (#3715)" (src/devices/flex.c only)
+merbanan/rtl_433 0c85f7ad3566ff6aefd8aedad569d05023c0c70c

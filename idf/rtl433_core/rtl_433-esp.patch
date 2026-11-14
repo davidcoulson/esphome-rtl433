@@ -1,8 +1,22 @@
+diff --git a/idf/rtl433_core/include/pulse_detect.h b/idf/rtl433_core/include/pulse_detect.h
+--- a/idf/rtl433_core/include/pulse_detect.h
++++ b/idf/rtl433_core/include/pulse_detect.h
+@@ -54,6 +54,11 @@
+ /// Preserves level estimates and resumes at the gap boundary in the same buffer.
+ void pulse_detect_skip_package(pulse_detect_t *pulse_detect);
+ 
++#ifdef ESP_PLATFORM
++/// True while an OOK package is open (a gap still has to run out): ESP squelch keeps feeding quiet pieces
++int pulse_detect_busy(pulse_detect_t const *pulse_detect);
++#endif
++
+ /// Reject a carrier package at PULSE_DETECT_PULSE and keep the OOK envelope, but
+ /// span the next pulse of this package for FSK detection again, signalled with
+ /// PULSE_DETECT_RETRY. Only one retry per package, later calls are ignored.
 diff --git a/idf/rtl433_core/include/r_api.h b/idf/rtl433_core/include/r_api.h
-index f742b8c..04724a0 100644
 --- a/idf/rtl433_core/include/r_api.h
 +++ b/idf/rtl433_core/include/r_api.h
-@@ -111,9 +111,9 @@ struct mg_mgr *get_mgr(struct r_cfg *cfg);
+@@ -118,9 +118,9 @@
  
  void set_center_freq(struct r_cfg *cfg, uint32_t center_freq);
  
@@ -15,10 +29,9 @@ index f742b8c..04724a0 100644
  void set_gain_str(struct r_cfg *cfg, char const *gain_str);
  
 diff --git a/idf/rtl433_core/include/r_private.h b/idf/rtl433_core/include/r_private.h
-index 7a2fd71..70e37db 100644
 --- a/idf/rtl433_core/include/r_private.h
 +++ b/idf/rtl433_core/include/r_private.h
-@@ -19,6 +19,14 @@
+@@ -22,6 +22,14 @@
  struct dm_state {
      float auto_level;
      float squelch_offset;
@@ -34,7 +47,6 @@ index 7a2fd71..70e37db 100644
      float noise_level;
      float min_level_auto;
 diff --git a/idf/rtl433_core/include/rtl_433.h b/idf/rtl433_core/include/rtl_433.h
-index e01ca64..1922244 100644
 --- a/idf/rtl433_core/include/rtl_433.h
 +++ b/idf/rtl433_core/include/rtl_433.h
 @@ -18,7 +18,9 @@
@@ -48,7 +60,7 @@ index e01ca64..1922244 100644
  #define SIGNAL_GRABBER_BUFFER   (12 * DEFAULT_BUF_LENGTH)
  #define MAX_FREQS               32
  
-@@ -80,6 +82,8 @@ typedef struct r_cfg {
+@@ -80,6 +82,8 @@
      int fsk_pulse_detect_mode;
      int hop_times;
      int hop_time[MAX_FREQS];
@@ -58,10 +70,9 @@ index e01ca64..1922244 100644
      int duration;
      time_t stop_time;
 diff --git a/idf/rtl433_core/include/sdr.h b/idf/rtl433_core/include/sdr.h
-index 241d2bd..c23e9a0 100644
 --- a/idf/rtl433_core/include/sdr.h
 +++ b/idf/rtl433_core/include/sdr.h
-@@ -206,6 +206,12 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
+@@ -206,6 +206,12 @@
  int sdr_stop(sdr_dev_t *dev);
  int sdr_stop_sync(sdr_dev_t *dev);
  
@@ -75,10 +86,9 @@ index 241d2bd..c23e9a0 100644
  */
  void sdr_redirect_logging(void);
 diff --git a/idf/rtl433_core/src/http_server.c b/idf/rtl433_core/src/http_server.c
-index d35ae6c..8ee6599 100644
 --- a/idf/rtl433_core/src/http_server.c
 +++ b/idf/rtl433_core/src/http_server.c
-@@ -411,17 +411,23 @@ static int json_parse(rpc_t *rpc, struct mg_str const *json)
+@@ -411,17 +411,23 @@
      /* Loop over all keys of the root object */
      for (i = 1; i < r; i++) {
          if (jsoneq(json->p, &t[i], "cmd") == 0) {
@@ -105,7 +115,7 @@ index d35ae6c..8ee6599 100644
              char *endptr = NULL;
              val = strtol(json->p + t[i].start, &endptr, 10);
              // compare endptr to t[i].end
-@@ -469,16 +475,22 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
+@@ -469,16 +475,22 @@
      /* Loop over all keys of the root object */
      for (int i = 1; i < r; i++) {
          if (jsoneq(json->p, &t[i], "jsonrpc") == 0) {
@@ -131,7 +141,7 @@ index d35ae6c..8ee6599 100644
              if (t[i].type == JSMN_STRING) {
                  free(id);
                  id = jsondupq(json->p, &t[i]);
-@@ -490,10 +502,11 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
+@@ -490,10 +502,11 @@
          }
          else if (jsoneq(json->p, &t[i], "params") == 0) {
              //printf("- Params:\n");
@@ -145,7 +155,7 @@ index d35ae6c..8ee6599 100644
                  jsmntok_t *g = &t[i + j + 2];
                  if (g->type == JSMN_STRING) {
                      free(arg);
-@@ -525,17 +538,33 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
+@@ -525,17 +538,33 @@
      return 0;
  }
  
@@ -180,7 +190,7 @@ index d35ae6c..8ee6599 100644
      }
      else if (!strcmp(rpc->method, "get_gain")) {
          rpc->response(rpc, 0, cfg->gain_str, 0);
-@@ -689,22 +718,32 @@ static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
+@@ -689,22 +718,32 @@
      }
      else if (!strcmp(rpc->method, "gain")) {
          if (!rpc->arg) {
@@ -220,7 +230,7 @@ index d35ae6c..8ee6599 100644
      }
  
      // Invalid
-@@ -725,10 +764,27 @@ struct http_server_context {
+@@ -725,10 +764,27 @@
      ring_list_t *history;
  };
  
@@ -249,7 +259,7 @@ index d35ae6c..8ee6599 100644
  static void handle_options(struct mg_connection *nc, struct http_message *hm)
  {
      UNUSED(hm);
-@@ -784,7 +840,7 @@ static void handle_openmetrics(struct mg_connection *nc, struct http_message *hm
+@@ -784,7 +840,7 @@
          return;
      }
  
@@ -258,7 +268,7 @@ index d35ae6c..8ee6599 100644
      r_cfg_t *cfg = ctx->cfg;
  
      time_t now;
-@@ -961,13 +1017,8 @@ static void handle_json_events(struct mg_connection *nc, struct http_message *hm
+@@ -961,13 +1017,8 @@
      mg_printf(nc, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
  
      /* Mark connection */
@@ -274,7 +284,7 @@ index d35ae6c..8ee6599 100644
  
      mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
  }
-@@ -980,13 +1031,8 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
+@@ -980,13 +1031,8 @@
      mg_printf(nc, "HTTP/1.1 200 OK\r\n\r\n");
  
      /* Mark connection */
@@ -290,7 +300,7 @@ index d35ae6c..8ee6599 100644
  
      mg_set_timer(nc, mg_time() + KEEP_ALIVE); // set keep alive timer
  }
-@@ -1001,7 +1047,7 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
+@@ -1001,7 +1047,7 @@
  // xh :8433/cmd cmd==gain arg==10
  static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
  {
@@ -299,7 +309,7 @@ index d35ae6c..8ee6599 100644
      char cmd[100], arg[100], val[100];
      rpc_t rpc = {
              .nc = nc,
-@@ -1036,7 +1082,7 @@ static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
+@@ -1036,7 +1082,7 @@
  // http POST :8433/jsonrpc jsonrpc=2.0 method=sample_rate params:='[1024000]'
  static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
  {
@@ -308,7 +318,7 @@ index d35ae6c..8ee6599 100644
  
      rpc_t rpc = {
              .nc       = nc,
-@@ -1052,8 +1098,8 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
+@@ -1052,8 +1098,8 @@
          rpc_exec(&rpc, ctx->cfg);
      }
      else {
@@ -319,7 +329,7 @@ index d35ae6c..8ee6599 100644
      }
  
      free(rpc.method);
-@@ -1064,7 +1110,7 @@ static void handle_json_rpc(struct mg_connection *nc, struct http_message *hm)
+@@ -1064,7 +1110,7 @@
  // Handles WS with JSON command
  static void handle_ws_rpc(struct mg_connection *nc, struct websocket_message *wm)
  {
@@ -328,7 +338,7 @@ index d35ae6c..8ee6599 100644
  
      rpc_t rpc = {
              .nc       = nc,
-@@ -1096,28 +1142,61 @@ static void send_keep_alive(struct mg_connection *nc)
+@@ -1096,28 +1142,61 @@
          return; // this should not happen
      }
  
@@ -395,7 +405,7 @@ index d35ae6c..8ee6599 100644
          /* New websocket connection. Send meta. */
          data_t *meta = meta_data(ctx->cfg);
          data_output_print(ctx->output, meta);
-@@ -1165,15 +1244,12 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
+@@ -1165,15 +1244,12 @@
          }
  #ifdef SERVE_STATIC
          else {
@@ -412,7 +422,7 @@ index d35ae6c..8ee6599 100644
      default:
          break;
      }
-@@ -1198,21 +1274,26 @@ static void http_broadcast_send(struct http_server_context *ctx, char const *msg
+@@ -1198,21 +1274,26 @@
          free(ring_list_push(ctx->history, dup));
      }
  
@@ -443,7 +453,7 @@ index d35ae6c..8ee6599 100644
              mg_send(nc, msg, len);
              mg_send(nc, "\r\n", 2);
              mg_set_timer(nc, mg_time() + KEEP_ALIVE); // reset keep alive timer
-@@ -1271,6 +1352,14 @@ static struct http_server_context *http_server_start(struct mg_mgr *mgr, char co
+@@ -1271,6 +1352,14 @@
  
  #define SHUTDOWN_JSON "{\"shutdown\":\"goodbye\"}"
  
@@ -458,7 +468,7 @@ index d35ae6c..8ee6599 100644
  static int http_server_stop(struct http_server_context *ctx)
  {
      if (!ctx) {
-@@ -1279,28 +1368,38 @@ static int http_server_stop(struct http_server_context *ctx)
+@@ -1279,28 +1368,38 @@
  
      // close the server
      ctx->conn->user_data = NULL;
@@ -502,10 +512,9 @@ index d35ae6c..8ee6599 100644
  
      for (void **iter = ring_list_iter(ctx->history); iter; iter = ring_list_next(ctx->history, iter))
 diff --git a/idf/rtl433_core/src/logger.c b/idf/rtl433_core/src/logger.c
-index dce0404..8413209 100644
 --- a/idf/rtl433_core/src/logger.c
 +++ b/idf/rtl433_core/src/logger.c
-@@ -31,12 +31,22 @@ void r_logger_set_log_handler(r_logger_handler const handler, void *userdata)
+@@ -31,12 +31,22 @@
  
  void print_log(log_level_t level, char const *src, char const *msg)
  {
@@ -529,10 +538,9 @@ index dce0404..8413209 100644
  
  void print_logf(log_level_t level, char const *src, char const *fmt, ...)
 diff --git a/idf/rtl433_core/src/output_rtltcp.c b/idf/rtl433_core/src/output_rtltcp.c
-index 5bbd5ec..6d0cb2d 100644
 --- a/idf/rtl433_core/src/output_rtltcp.c
 +++ b/idf/rtl433_core/src/output_rtltcp.c
-@@ -168,6 +168,11 @@ E.g. initialization from Gqrx:
+@@ -168,6 +168,11 @@
  static int parse_command(r_cfg_t *cfg, int control, uint8_t const *buf, int len)
  {
      UNUSED(cfg);
@@ -544,11 +552,27 @@ index 5bbd5ec..6d0cb2d 100644
  
      if (len < 5)
          return 0;
+diff --git a/idf/rtl433_core/src/pulse_detect.c b/idf/rtl433_core/src/pulse_detect.c
+--- a/idf/rtl433_core/src/pulse_detect.c
++++ b/idf/rtl433_core/src/pulse_detect.c
+@@ -224,6 +224,13 @@
+     }
+ }
+ 
++#ifdef ESP_PLATFORM
++int pulse_detect_busy(pulse_detect_t const *s)
++{
++    return s->ook_state != PD_OOK_STATE_IDLE;
++}
++#endif
++
+ void pulse_detect_skip_package(pulse_detect_t *s)
+ {
+     if (s->pending_gap) {
 diff --git a/idf/rtl433_core/src/r_api.c b/idf/rtl433_core/src/r_api.c
-index 2a94dc5..1fe9da6 100644
 --- a/idf/rtl433_core/src/r_api.c
 +++ b/idf/rtl433_core/src/r_api.c
-@@ -84,20 +84,32 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
+@@ -86,20 +86,32 @@
      cfg->frequencies = 1;
      cfg->frequency_index = 0;
      cfg->frequency[0] = center_freq;
@@ -586,7 +610,7 @@ index 2a94dc5..1fe9da6 100644
  }
  
  void set_gain_str(struct r_cfg *cfg, char const *gain_str)
-@@ -130,21 +142,22 @@ void r_init_cfg(r_cfg_t *cfg)
+@@ -132,21 +144,22 @@
      list_ensure_size(&cfg->output_handler, 16);
  
      // collect devices list, this should be a module
@@ -616,7 +640,7 @@ index 2a94dc5..1fe9da6 100644
  
      cfg->demod = calloc(1, sizeof(*cfg->demod));
      if (!cfg->demod)
-@@ -180,6 +193,13 @@ r_cfg_t *r_create_cfg(void)
+@@ -188,6 +201,13 @@
      return cfg;
  }
  
@@ -630,7 +654,7 @@ index 2a94dc5..1fe9da6 100644
  void r_free_cfg(r_cfg_t *cfg)
  {
      if (cfg->dev) {
-@@ -217,12 +237,20 @@ void r_free_cfg(r_cfg_t *cfg)
+@@ -230,12 +250,20 @@
  
      list_free_elems(&cfg->in_files, NULL);
  
@@ -651,7 +675,7 @@ index 2a94dc5..1fe9da6 100644
      mg_mgr_free(cfg->mgr);
      free(cfg->mgr);
      cfg->mgr = NULL;
-@@ -591,6 +619,8 @@ void r_redirect_logging(r_cfg_t *cfg)
+@@ -702,6 +730,8 @@
  /** Pass the data structure to all output handlers. Frees data afterwards. */
  void event_occurred_handler(r_cfg_t *cfg, data_t *data)
  {
@@ -660,7 +684,7 @@ index 2a94dc5..1fe9da6 100644
      // prepend "time" if requested
      if (cfg->report_time != REPORT_TIME_OFF) {
          char time_str[LOCAL_TIME_BUFLEN];
-@@ -629,9 +659,16 @@ void log_device_handler(r_device *r_dev, int level, data_t *data)
+@@ -753,9 +783,16 @@
  }
  
  /** Pass the data structure to all output handlers. Frees data afterwards. */
@@ -678,10 +702,9 @@ index 2a94dc5..1fe9da6 100644
  #ifndef NDEBUG
      // check for undeclared csv fields
 diff --git a/idf/rtl433_core/src/r_flow.c b/idf/rtl433_core/src/r_flow.c
-index 95f0c27..0a70608 100644
 --- a/idf/rtl433_core/src/r_flow.c
 +++ b/idf/rtl433_core/src/r_flow.c
-@@ -70,7 +70,17 @@ Flush the SDR IQ data frame processing, e.g. on the end of a input file.
+@@ -70,7 +70,17 @@
  */
  int flush_sdr_flow(r_cfg_t *cfg)
  {
@@ -700,10 +723,10 @@ index 95f0c27..0a70608 100644
  }
  
  /**
-@@ -94,6 +104,13 @@ void reset_sdr_flow(r_cfg_t *cfg)
-     baseband_demod_FM_reset(&demod->demod_FM_state);
- 
-     pulse_detect_reset(demod->pulse_detect);
+@@ -104,6 +114,13 @@
+     }
+     lora_fft_demod_reset(demod->lora_fft_demod);
+     lora_fm_demod_reset(demod->lora_fm_demod);
 +#ifdef ESP_PLATFORM
 +    // the squelch look-behind block (ESP port) belongs to the input before the reset
 +    demod->squelch_prev_len    = 0;
@@ -713,8 +736,8 @@ index 95f0c27..0a70608 100644
 +#endif
  }
  
- /**
-@@ -112,6 +129,30 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+ /// FSK pulse detectors to run, in the order their packages are tried.
+@@ -370,6 +387,30 @@
          return 0; // ignore the data
      }
  
@@ -745,7 +768,7 @@ index 95f0c27..0a70608 100644
      unsigned n_samples = len / demod->sample_size;
      if (n_samples * demod->sample_size != len) {
          print_log(LOG_WARNING, __func__, "Sample buffer length not aligned to sample size!");
-@@ -124,6 +165,7 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+@@ -395,6 +436,7 @@
  
      // Feed data to all raw outputs (e.g. rtl_tcp)
      // do this here and not in sdr_handler so realtime replay can use rtl_tcp output
@@ -753,7 +776,7 @@ index 95f0c27..0a70608 100644
      for (void **iter = demod->raw_handler->elems; iter && *iter; ++iter) {
          raw_output_t *output = *iter;
          raw_output_frame(output, iq_buf, len);
-@@ -133,11 +175,11 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+@@ -404,11 +446,11 @@
      time_t last_frame_sec = demod->now.tv_sec;
      get_time_now(&demod->now);
  
@@ -768,7 +791,7 @@ index 95f0c27..0a70608 100644
          demod->frame_end_ago += n_samples;
      }
  
-@@ -172,6 +214,49 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+@@ -443,6 +485,51 @@
      int noise_only = avg_db < demod->noise_level + 3.0f; // or demod->min_level_auto?
      // always process frames if loader, dumper, or analyzers are in use, otherwise skip silent frames
      process_frame = demod->squelch_offset <= 0 || !noise_only || demod->load_info.format || demod->analyze_pulses || demod->dumper.len || demod->samp_grab;
@@ -789,13 +812,15 @@ index 95f0c27..0a70608 100644
 +                if (demod->use_mag_est) {
 +                    magnitude_est_cu8(iq_buf, demod->buf.temp, n_samples);
 +                } else {
-+                    envelope_detect(iq_buf, demod->buf.temp, n_samples);
++                    envelope_detect_nolut(iq_buf, demod->buf.temp, n_samples);
 +                }
 +            } else {
 +                magnitude_est_cs16((int16_t *)iq_buf, demod->buf.temp, n_samples);
 +            }
 +        }
-+        if (noise_only && demod->squelch_prev_active) {
++        // ...and so is every quiet piece until the open package's gap has run out (10 ms minimum, 10x the
++        // longest pulse): skipped silence is not counted, so a package left open would swallow the next burst
++        if (noise_only && (demod->squelch_prev_active || pulse_detect_busy(demod->pulse_detect))) {
 +            process_frame = 1;
 +        }
 +        if (demod->squelch_prev_cap < len) {
@@ -818,7 +843,7 @@ index 95f0c27..0a70608 100644
      demod->total_frames_count += 1;
      if (noise_only) {
          demod->total_frames_squelch += 1;
-@@ -187,6 +272,9 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+@@ -458,6 +545,9 @@
      } else {
          demod->noise_level = (demod->noise_level * 31 + avg_db) / 32; // slow rise over 32 frames
      }
@@ -828,7 +853,7 @@ index 95f0c27..0a70608 100644
      // Report noise every report_noise seconds, but only for the first frame that second
      if (demod->report_noise && last_frame_sec != demod->now.tv_sec && demod->now.tv_sec % demod->report_noise == 0) {
          print_logf(LOG_WARNING, "Auto Level", "Current %s level %.1f dB, estimated noise %.1f dB",
-@@ -488,7 +576,13 @@ int push_sdr_flow(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+@@ -850,7 +940,13 @@
          }
      }
  
@@ -844,10 +869,9 @@ index 95f0c27..0a70608 100644
      return d_events;
  }
 diff --git a/idf/rtl433_core/src/r_util.c b/idf/rtl433_core/src/r_util.c
-index cafd63c..75ecfb4 100644
 --- a/idf/rtl433_core/src/r_util.c
 +++ b/idf/rtl433_core/src/r_util.c
-@@ -23,6 +23,30 @@ void get_time_now(struct timeval *tv)
+@@ -23,6 +23,30 @@
      }
  }
  
@@ -878,7 +902,7 @@ index cafd63c..75ecfb4 100644
  char *format_time_str(char *buf, char const *format, int with_tz, time_t time_secs)
  {
      time_t etime;
-@@ -47,10 +71,14 @@ char *format_time_str(char *buf, char const *format, int with_tz, time_t time_se
+@@ -47,10 +71,14 @@
  
      size_t l = strftime(buf, LOCAL_TIME_BUFLEN, format, &tm_info);
      if (with_tz) {
@@ -893,7 +917,7 @@ index cafd63c..75ecfb4 100644
      }
      return buf;
  }
-@@ -79,10 +107,14 @@ char *usecs_time_str(char *buf, char const *format, int with_tz, struct timeval
+@@ -79,10 +107,14 @@
      size_t l = strftime(buf, LOCAL_TIME_BUFLEN, format, &tm_info);
      l += snprintf(buf + l, LOCAL_TIME_BUFLEN - l, ".%06ld", (long)tv->tv_usec);
      if (with_tz) {
@@ -909,7 +933,6 @@ index cafd63c..75ecfb4 100644
      return buf;
  }
 diff --git a/idf/rtl433_core/src/rtl_433.c b/idf/rtl433_core/src/rtl_433.c
-index c8bb91d..45414d9 100644
 --- a/idf/rtl433_core/src/rtl_433.c
 +++ b/idf/rtl433_core/src/rtl_433.c
 @@ -29,6 +29,9 @@
@@ -922,7 +945,7 @@ index c8bb91d..45414d9 100644
  #include "r_private.h"
  #include "r_device.h"
  #include "r_api.h"
-@@ -381,11 +384,20 @@ static void help_write(void)
+@@ -383,11 +386,20 @@
      exit(0);
  }
  
@@ -944,7 +967,7 @@ index c8bb91d..45414d9 100644
      while ((opt = getopt(argc, argv, optstring)) != -1) {
          if (opt == test || optopt == test) {
              return opt;
-@@ -480,7 +492,7 @@ static void parse_conf_args(r_cfg_t *cfg, int argc, char *argv[])
+@@ -482,7 +494,7 @@
  {
      int opt;
  
@@ -953,7 +976,7 @@ index c8bb91d..45414d9 100644
      while ((opt = getopt(argc, argv, OPTSTRING)) != -1) {
          if (opt == '?') {
              opt = optopt; // allow missing arguments
-@@ -594,6 +606,10 @@ static void parse_conf_option(r_cfg_t *cfg, int opt, char *arg)
+@@ -596,6 +608,10 @@
          break;
      case 's':
          cfg->samp_rate = atouint32_metric(arg, "-s: ");
@@ -964,9 +987,26 @@ index c8bb91d..45414d9 100644
          break;
      case 'b':
          cfg->out_block_size = atouint32_metric(arg, "-b: ");
-@@ -1180,7 +1196,19 @@ static void process_sdr_frame(r_cfg_t *cfg, unsigned char *iq_buf, uint32_t len)
+@@ -1107,6 +1123,11 @@
+ }
+ #endif
+ 
++#ifdef ESP_RTL_SDR
++static uint32_t hop_old_freq, hop_old_rate; // the band the last hop left
++static int hop_drop_left;                    // queued frames of that band still to drop
++#endif
++
+ /**
+ Process an IQ data frame with push_sdr_flow() and run side effects.
+ 
+@@ -1206,8 +1227,30 @@
+     if (cfg->hop_now && !cfg->exit_async) {
          cfg->hop_now = 0;
          time(&cfg->hop_start_time);
++#ifdef ESP_RTL_SDR
++        uint32_t const old_freq = cfg->frequency[cfg->frequency_index];
++        uint32_t const old_rate = cfg->samp_rate;
++#endif
          cfg->frequency_index = (cfg->frequency_index + 1) % cfg->frequencies;
 +        if (cfg->hop_rates > 1) {
 +            // per-frequency sample rate: if there are too few, the last one applies
@@ -975,6 +1015,12 @@ index c8bb91d..45414d9 100644
 +                sdr_set_sample_rate(cfg->dev, cfg->hop_rate[rate_index], 1);
 +        }
 +#ifdef ESP_RTL_SDR
++        // Frames of the band being left may already be queued behind this one: sdr_handler drops up to 8 of
++        // them, or they would be decoded with the new band's decoders
++        hop_old_freq  = old_freq;
++        hop_old_rate  = old_rate;
++        hop_drop_left = (cfg->frequency[cfg->frequency_index] != old_freq
++                || (cfg->hop_rates > 1 && cfg->hop_rate[cfg->hop_rates > cfg->frequency_index ? cfg->frequency_index : cfg->hop_rates - 1] != old_rate)) ? 8 : 0;
 +        flush_sdr_flow(cfg); // decode the old band's tail with the old band's decoders
 +#endif
          sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1);
@@ -984,7 +1030,27 @@ index c8bb91d..45414d9 100644
      }
  }
  
-@@ -1292,6 +1320,7 @@ static int start_sdr(r_cfg_t *cfg)
+@@ -1265,6 +1308,19 @@
+     }
+ 
+     if (ev->ev == SDR_EV_DATA) {
++#ifdef ESP_RTL_SDR
++        if (hop_drop_left > 0) {
++            if (ev->center_frequency == hop_old_freq && ev->sample_rate == hop_old_rate) {
++                // queued before the hop: it would be decoded with the new band's decoders
++                hop_drop_left--;
++                if (ev->len > 0) {
++                    cfg->watchdog++; // still frames arriving
++                }
++                return;
++            }
++            hop_drop_left = 0;
++        }
++#endif
+         cfg->samp_rate        = ev->sample_rate;
+         cfg->center_frequency = ev->center_frequency;
+ 
+@@ -1319,6 +1375,7 @@
  {
      int r;
      if (cfg->dev) {
@@ -992,7 +1058,7 @@ index c8bb91d..45414d9 100644
          r = sdr_close(cfg->dev);
          cfg->dev = NULL;
          if (r < 0) {
-@@ -1302,11 +1331,20 @@ static int start_sdr(r_cfg_t *cfg)
+@@ -1329,11 +1386,20 @@
      if (r < 0) {
          return -1; // exit(2);
      }
@@ -1013,31 +1079,16 @@ index c8bb91d..45414d9 100644
      sdr_set_sample_rate(cfg->dev, cfg->samp_rate, 1); // always verbose
  
      if (cfg->verbosity || cfg->demod->level_limit < 0.0) {
-@@ -1333,7 +1371,7 @@ static int start_sdr(r_cfg_t *cfg)
+@@ -1360,7 +1426,7 @@
          print_log(LOG_NOTICE, "Input", "Reading samples in async mode...");
      }
  
 -    sdr_set_center_freq(cfg->dev, cfg->center_frequency, 1); // always verbose
-+    sdr_set_center_freq(cfg->dev, cfg->frequencies > 1 ? cfg->frequency[cfg->frequency_index] : cfg->center_frequency, 1); // hopping: center_frequency is the last band that delivered data, stale after a failed hop
++    sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1); // not center_frequency: that is the last band that delivered data, stale after a failed hop or a retune made while the dongle was away
  
      r = sdr_start(cfg->dev, acquire_callback, (void *)get_mgr(cfg),
              DEFAULT_ASYNC_BUF_NUMBER, cfg->out_block_size);
-@@ -1413,8 +1451,12 @@ static void timer_handler(struct mg_connection *nc, int ev, void *ev_data)
-             }
-         }
-         if (cfg->dev_state != DEVICE_STATE_STOPPED) {
--            cfg->exit_async = 1;
--            cfg->exit_code = 3;
-+            // exit_async is never cleared, so only set it when we mean to quit (upstream sets it here
-+            // unconditionally, which makes "-D restart" exit after the restart)
-+            if (cfg->dev_mode == DEVICE_MODE_QUIT) {
-+                cfg->exit_async = 1;
-+                cfg->exit_code = 3;
-+            }
-             sdr_stop(cfg->dev);
-             cfg->dev_state = DEVICE_STATE_STOPPED;
-         }
-@@ -1431,6 +1473,24 @@ static void timer_handler(struct mg_connection *nc, int ev, void *ev_data)
+@@ -1463,6 +1529,24 @@
      }
  }
  
@@ -1062,7 +1113,7 @@ index c8bb91d..45414d9 100644
  int main(int argc, char **argv) {
      int r = 0;
      struct dm_state *demod;
-@@ -1440,6 +1500,9 @@ int main(int argc, char **argv) {
+@@ -1472,6 +1556,9 @@
      sdr_redirect_logging();
  
      r_init_cfg(cfg);
@@ -1072,7 +1123,7 @@ index c8bb91d..45414d9 100644
  
      setbuf(stdout, NULL);
      setbuf(stderr, NULL);
-@@ -1518,6 +1581,9 @@ int main(int argc, char **argv) {
+@@ -1550,6 +1637,9 @@
      if (!cfg->no_default_devices) {
          register_all_protocols(cfg, 0); // register all defaults
      }
@@ -1082,7 +1133,7 @@ index c8bb91d..45414d9 100644
  
      // check if we need FM demod
      for (void **iter = demod->r_devs.elems; iter && *iter; ++iter) {
-@@ -1900,6 +1966,14 @@ int main(int argc, char **argv) {
+@@ -1941,6 +2031,14 @@
      if (cfg->dev_mode != DEVICE_MODE_MANUAL) {
          r = start_sdr(cfg);
          if (r < 0) {
@@ -1097,7 +1148,7 @@ index c8bb91d..45414d9 100644
              exit(2);
          }
      }
-@@ -1919,6 +1993,9 @@ int main(int argc, char **argv) {
+@@ -1960,6 +2058,9 @@
  
      while (!cfg->exit_async) {
          mg_mgr_poll(cfg->mgr, 500);
@@ -1108,10 +1159,9 @@ index c8bb91d..45414d9 100644
      if (cfg->verbosity >= LOG_INFO) {
          print_log(LOG_INFO, "rtl_433", "stopping...");
 diff --git a/idf/rtl433_core/src/sdr.c b/idf/rtl433_core/src/sdr.c
-index 2436821..e53ffd0 100644
 --- a/idf/rtl433_core/src/sdr.c
 +++ b/idf/rtl433_core/src/sdr.c
-@@ -23,6 +23,13 @@
+@@ -24,6 +24,13 @@
  #include "logger.h"
  #include "fatal.h"
  #include "compat_pthread.h"
@@ -1125,7 +1175,7 @@ index 2436821..e53ffd0 100644
  #ifdef RTLSDR
  #include <rtl-sdr.h>
  #if defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
-@@ -94,6 +101,18 @@ struct sdr_dev {
+@@ -95,6 +102,18 @@
      void *rtlsdr_cb_ctx;
  #endif
  
@@ -1144,7 +1194,7 @@ index 2436821..e53ffd0 100644
      char *dev_info;
  
      int running;
-@@ -1117,6 +1136,406 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
+@@ -1131,6 +1150,417 @@
  
  #endif
  
@@ -1224,12 +1274,23 @@ index 2436821..e53ffd0 100644
 +
 +static int esp_opened_before = 0; // only the first open (start-up) waits for the dongle
 +static int esp_absent_logged = 0; // "no dongle" is logged once per absence, not on every retry
++static int esp_cleanup_pending = 0; // esp_handle is the driver's cleanup-only handle from a failed install
 +
 +static int esp_sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
 +{
 +    UNUSED(verbose);
 +    int may_wait = !esp_opened_before;
 +    esp_opened_before = 1;
++    if (esp_cleanup_pending) {
++        // A failed install that could not unwind returned this handle: it is the only way to release what the
++        // driver kept (workers, USB ownership), so finish that before installing again
++        if (esp_rtl_sdr_uninstall(esp_handle) != ESP_OK) {
++            print_log(LOG_ERROR, __func__, "esp_rtl_sdr_uninstall of a failed install did not finish; will retry");
++            return -1;
++        }
++        esp_handle = NULL;
++        esp_cleanup_pending = 0;
++    }
 +    if (esp_handle == NULL) {
 +        esp_rtl_sdr_config_t config;
 +        esp_rtl_sdr_config_default(&config);
@@ -1251,7 +1312,7 @@ index 2436821..e53ffd0 100644
 +        }
 +        if (err != ESP_OK) {
 +            print_logf(LOG_ERROR, __func__, "esp_rtl_sdr_install failed: %s", esp_rtl_sdr_err_to_name(err));
-+            esp_handle = NULL;
++            esp_cleanup_pending = esp_handle != NULL; // keep a cleanup-only handle, see above
 +            return -1;
 +        }
 +    }
@@ -1551,7 +1612,7 @@ index 2436821..e53ffd0 100644
  /* Public API */
  
  int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
-@@ -1124,6 +1543,11 @@ int sdr_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
+@@ -1138,6 +1568,11 @@
      if (dev_query && !strncmp(dev_query, "rtl_tcp", 7))
          return rtltcp_open(out_dev, dev_query, verbose);
  
@@ -1563,7 +1624,7 @@ index 2436821..e53ffd0 100644
  #if !defined(RTLSDR) && !defined(SOAPYSDR)
      if (verbose)
          print_log(LOG_ERROR, __func__, "No input drivers (RTL-SDR or SoapySDR) compiled in.");
-@@ -1163,6 +1587,18 @@ int sdr_close(sdr_dev_t *dev)
+@@ -1177,6 +1612,18 @@
      if (dev->rtl_tcp)
          ret = rtltcp_close(dev->rtl_tcp);
  
@@ -1582,7 +1643,7 @@ index 2436821..e53ffd0 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          ret = SoapySDRDevice_unmake(dev->soapy_dev);
-@@ -1213,10 +1649,19 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1227,11 +1674,20 @@
          return -1;
  
  #ifdef THREADS
@@ -1598,11 +1659,12 @@ index 2436821..e53ffd0 100644
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
-+#endif
  #endif
++#endif
  
      int r = -1;
-@@ -1226,6 +1671,14 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+ 
+@@ -1240,6 +1696,14 @@
          r = rtltcp_command(dev, RTLTCP_SET_FREQ, freq);
      }
  
@@ -1617,7 +1679,7 @@ index 2436821..e53ffd0 100644
  #ifdef SOAPYSDR
      SoapySDRKwargs args = {0};
      if (dev->soapy_dev) {
-@@ -1247,10 +1700,16 @@ int sdr_set_center_freq(sdr_dev_t *dev, uint32_t freq, int verbose)
+@@ -1261,10 +1725,16 @@
              print_logf(LOG_NOTICE, "SDR", "Tuned to %s.", nice_freq(sdr_get_center_freq(dev)));
      }
  
@@ -1634,7 +1696,7 @@ index 2436821..e53ffd0 100644
  #ifdef THREADS
      pthread_mutex_unlock(&dev->lock);
  #endif
-@@ -1266,6 +1725,14 @@ uint32_t sdr_get_center_freq(sdr_dev_t *dev)
+@@ -1280,6 +1750,14 @@
      if (dev->rtl_tcp)
          return dev->rtl_tcp_freq;
  
@@ -1649,7 +1711,7 @@ index 2436821..e53ffd0 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getFrequency(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1285,10 +1752,19 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+@@ -1299,17 +1777,33 @@
          return -1;
  
  #ifdef THREADS
@@ -1665,11 +1727,11 @@ index 2436821..e53ffd0 100644
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
-+#endif
  #endif
++#endif
  
      int r = -1;
-@@ -1296,6 +1772,13 @@ int sdr_set_freq_correction(sdr_dev_t *dev, int ppm, int verbose)
+ 
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_FREQ_CORRECTION, ppm);
  
@@ -1683,7 +1745,7 @@ index 2436821..e53ffd0 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setFrequencyComponent(dev->soapy_dev, SOAPY_SDR_RX, 0, "CORR", (double)ppm, NULL);
-@@ -1324,10 +1807,19 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+@@ -1338,17 +1832,35 @@
          return -1;
  
  #ifdef THREADS
@@ -1699,11 +1761,11 @@ index 2436821..e53ffd0 100644
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
-+#endif
  #endif
++#endif
  
      int r = -1;
-@@ -1335,6 +1827,15 @@ int sdr_set_auto_gain(sdr_dev_t *dev, int verbose)
+ 
      if (dev->rtl_tcp)
          r = rtltcp_command(dev, RTLTCP_SET_GAIN_MODE, 0);
  
@@ -1719,7 +1781,7 @@ index 2436821..e53ffd0 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = soapysdr_auto_gain(dev->soapy_dev, verbose);
-@@ -1360,10 +1861,19 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+@@ -1374,11 +1886,20 @@
          return -1;
  
  #ifdef THREADS
@@ -1735,11 +1797,12 @@ index 2436821..e53ffd0 100644
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
-+#endif
  #endif
++#endif
  
      int r = -1;
-@@ -1390,6 +1900,17 @@ int sdr_set_tuner_gain(sdr_dev_t *dev, char const *gain_str, int verbose)
+ 
+@@ -1404,6 +1925,17 @@
                  || rtltcp_command(dev, RTLTCP_SET_GAIN, gain);
      }
  
@@ -1757,7 +1820,7 @@ index 2436821..e53ffd0 100644
  #ifdef RTLSDR
      /* Enable manual gain */
      r = rtlsdr_set_tuner_gain_mode(dev->rtlsdr_dev, 1);
-@@ -1466,10 +1987,19 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1480,11 +2012,20 @@
          return -1;
  
  #ifdef THREADS
@@ -1773,11 +1836,12 @@ index 2436821..e53ffd0 100644
          fprintf(stderr, "%s: must not be called from acquire callback!\n", __func__);
          return -1;
      }
-+#endif
  #endif
++#endif
  
      int r = -1;
-@@ -1479,6 +2009,42 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+ 
+@@ -1493,6 +2034,42 @@
          r = rtltcp_command(dev, RTLTCP_SET_SAMPLE_RATE, rate);
      }
  
@@ -1820,7 +1884,7 @@ index 2436821..e53ffd0 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          r = SoapySDRDevice_setSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0, (double)rate);
-@@ -1496,10 +2062,16 @@ int sdr_set_sample_rate(sdr_dev_t *dev, uint32_t rate, int verbose)
+@@ -1510,10 +2087,16 @@
              print_logf(LOG_NOTICE, "SDR", "Sample rate set to %u S/s.", sdr_get_sample_rate(dev)); // Unfortunately, doesn't return real rate
      }
  
@@ -1837,7 +1901,7 @@ index 2436821..e53ffd0 100644
  #ifdef THREADS
      pthread_mutex_unlock(&dev->lock);
  #endif
-@@ -1515,6 +2087,11 @@ uint32_t sdr_get_sample_rate(sdr_dev_t *dev)
+@@ -1529,6 +2112,11 @@
      if (dev->rtl_tcp)
          return dev->rtl_tcp_rate;
  
@@ -1849,7 +1913,7 @@ index 2436821..e53ffd0 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return (uint32_t)SoapySDRDevice_getSampleRate(dev->soapy_dev, SOAPY_SDR_RX, 0);
-@@ -1539,6 +2116,30 @@ int sdr_apply_settings(sdr_dev_t *dev, char const *sdr_settings, int verbose)
+@@ -1553,6 +2141,30 @@
      if (!sdr_settings || !*sdr_settings)
          return 0;
  
@@ -1880,7 +1944,7 @@ index 2436821..e53ffd0 100644
      if (dev->rtl_tcp) {
          while (sdr_settings && *sdr_settings) {
              char const *val = NULL;
-@@ -1712,6 +2313,11 @@ int sdr_start_sync(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint32_t buf_nu
+@@ -1726,6 +2338,11 @@
      if (dev->rtl_tcp)
          return rtltcp_read_loop(dev, cb, ctx, buf_num, buf_len);
  
@@ -1892,7 +1956,7 @@ index 2436821..e53ffd0 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev)
          return soapysdr_read_loop(dev, cb, ctx, buf_num, buf_len);
-@@ -1735,6 +2341,13 @@ int sdr_stop_sync(sdr_dev_t *dev)
+@@ -1749,6 +2366,13 @@
          return 0;
      }
  
@@ -1906,7 +1970,7 @@ index 2436821..e53ffd0 100644
  #ifdef SOAPYSDR
      if (dev->soapy_dev) {
          dev->running = 0;
-@@ -1773,6 +2386,9 @@ void sdr_redirect_logging(void)
+@@ -1787,6 +2411,9 @@
  static THREAD_RETURN THREAD_CALL acquire_thread(void *arg)
  {
      sdr_dev_t *dev = arg;
@@ -1916,7 +1980,7 @@ index 2436821..e53ffd0 100644
      print_log(LOG_DEBUG, __func__, "acquire_thread enter...");
  
      int r = sdr_start_sync(dev, dev->async_cb, dev->async_ctx, dev->buf_num, dev->buf_len);
-@@ -1824,10 +2440,19 @@ int sdr_stop(sdr_dev_t *dev)
+@@ -1838,10 +2465,19 @@
      if (!dev)
          return -1;
  

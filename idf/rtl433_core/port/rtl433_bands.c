@@ -61,7 +61,7 @@ static void unregister_all(r_cfg_t *cfg) {
   for (size_t i = devs->len; i-- > 0;) {
     r_device *dev = devs->elems[i];
     if (dev != NULL && is_builtin(cfg, dev))
-      unregister_protocol(cfg, dev);
+      list_remove(devs, i, (list_elem_free_fn) free_protocol);  // not unregister_protocol(): it frees dev, then keeps comparing against dev->name
   }
 }
 

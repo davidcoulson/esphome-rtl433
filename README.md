@@ -17,7 +17,7 @@ RTL-SDR dongle ──USB 2.0 HS──► esp_rtl_sdr (USB host driver, CU8 I/Q)
 - [`esp_rtl_sdr`](https://github.com/hardcoreerik/esp-rtl-sdr) is the USB host driver for the dongle, fetched as an IDF component. It is clean-room and experimental. **This component pins a [fork](https://github.com/davidcoulson/esp-rtl-sdr) at `v0.9.6-dc.1`**: upstream v0.9.6 plus lifecycle and recovery fixes and a selectable R820T2 IF mode (see [Known issues](#known-issues)).
 - `components/rtl_433/`: the ESPHome component. It starts rtl_433 in its own task (64 KB stack) once the network is up and the clock is set, routes its log into the ESPHome logger, and flags the component as errored if rtl_433 ever exits.
 
-Changes to upstream rtl_433 worth knowing about: the demodulator's four internal buffers are sized to 256 K samples instead of 4 M (36 MB, which no ESP32 has); `-D restart` really restarts (upstream exits after the first watchdog restart); the USB driver stays installed for the life of the firmware, so a replugged dongle is picked up by the driver's own rescan; a missing dongle at boot is retried instead of fatal, every 1.5 s without blocking the HTTP server; the SDR setters no longer go through `pthread_self()`, which aborts on ESP-IDF when called from a plain FreeRTOS task; getopt is reset the way newlib needs (upstream's reset printed a stray `invalid option -- '--'`); the HTTP server sends events only to WebSocket, `/events` and `/stream` clients (upstream also appended every event to the listening socket's send buffer, which is never drained, so PSRAM fell steadily for as long as the board was up; and into the replies of plain keep-alive HTTP connections); `get_dev_info` answers `null` while no dongle is open instead of crashing; the JSON command parsers check every token index against what jsmn parsed; and the HTTP API can be made read-only (`remote_control: false`).
+Changes to upstream rtl_433 worth knowing about (the tree is upstream `0c85f7a`, 7 Nov 2026, which includes its reworked FSK detection, its LoRa decoders and new decoders such as Paradox Magellan and Bresser 3CH; LoRa is not used by this component): the demodulator's four internal buffers are sized to 256 K samples instead of 4 M (36 MB, which no ESP32 has); the USB driver stays installed for the life of the firmware, so a replugged dongle is picked up by the driver's own rescan; a missing dongle at boot is retried instead of fatal, every 1.5 s without blocking the HTTP server; the SDR setters no longer go through `pthread_self()`, which aborts on ESP-IDF when called from a plain FreeRTOS task; getopt is reset the way newlib needs (upstream's reset printed a stray `invalid option -- '--'`); the HTTP server sends events only to WebSocket, `/events` and `/stream` clients (upstream also appended every event to the listening socket's send buffer, which is never drained, so PSRAM fell steadily for as long as the board was up; and into the replies of plain keep-alive HTTP connections); `get_dev_info` answers `null` while no dongle is open instead of crashing; the JSON command parsers check every token index against what jsmn parsed; and the HTTP API can be made read-only (`remote_control: false`).
 
 ## Hardware
 
@@ -50,7 +50,7 @@ time:                     # required: events carry a timestamp the HA integratio
   - platform: homeassistant
 
 external_components:
-  - source: github://davidcoulson/esphome-rtl433@v0.1.14
+  - source: github://davidcoulson/esphome-rtl433@v0.1.15
     components: [rtl_433]
 
 rtl_433:
