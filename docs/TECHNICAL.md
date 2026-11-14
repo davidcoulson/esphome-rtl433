@@ -1,0 +1,158 @@
+# Technical notes
+
+How esphome-rtl433 works inside, every option, test results and known issues. To get a receiver running, start with the [README](../README.md).
+
+> **Status (2026-09-24): working on real hardware.** One ESP32-P4-WIFI6-POE-ETH with a Nooelec NESDR SMArt v5 has replaced a two-dongle Linux rtl_433 install in the author's house: it hops between 433.92 MHz (Acurite fridge/freezer sensors) and 915 MHz (SCMplus water and gas meters), and the Home Assistant integration is pointed straight at it. Tested for about a day, not months; the [example config](../examples/p4-wifi6-poe-eth.yaml) is the one that is running. See [Known issues](#known-issues) before buying a dongle.
+
+## How it fits together
+
+```
+RTL-SDR dongle ──USB 2.0 HS──► esp_rtl_sdr (USB host driver, CU8 I/Q)
+                                   │  "esp" input backend in rtl_433's sdr.c
+                                   ▼
+                          rtl_433 (all decoders) ──► HTTP/WebSocket :8433 ◄── HA rtl_433 integration
+```
+
+- `idf/rtl433_core/`: rtl_433 (pinned upstream commit in [`UPSTREAM`](../idf/rtl433_core/UPSTREAM)) built as an ESP-IDF component. The changes to upstream are in [`rtl_433-esp.patch`](../idf/rtl433_core/rtl_433-esp.patch): an `esp` input backend in `src/sdr.c`, a log hook in `src/logger.c`, and the fixes listed below. Everything else is shimmed from `port/` (`exit()` ends the task instead of rebooting, no TTY, a few POSIX calls lwIP/picolibc lack).
+- [`esp_rtl_sdr`](https://github.com/hardcoreerik/esp-rtl-sdr) is the USB host driver for the dongle, fetched as an IDF component. It is clean-room and experimental. **This component pins a [fork](https://github.com/davidcoulson/esp-rtl-sdr) at `v0.9.6-dc.2`**: upstream v0.9.6 plus lifecycle and recovery fixes and a selectable R820T2 IF mode (see [Known issues](#known-issues)).
+- `components/rtl_433/`: the ESPHome component. It starts rtl_433 in its own task (64 KB stack) once the network is up and the clock is set, routes its log into the ESPHome logger, and flags the component as errored if rtl_433 ever exits.
+
+Changes to upstream rtl_433 worth knowing about (the tree is upstream `0c85f7a`, 7 Nov 2026, which includes its reworked FSK detection, its LoRa decoders and new decoders such as Paradox Magellan and Bresser 3CH; LoRa is not used by this component): the demodulator's four internal buffers are sized to 256 K samples instead of 4 M (36 MB, which no ESP32 has); the USB driver stays installed for the life of the firmware, so a replugged dongle is picked up by the driver's own rescan; a missing dongle at boot is retried instead of fatal, every 1.5 s without blocking the HTTP server; the SDR setters no longer go through `pthread_self()`, which aborts on ESP-IDF when called from a plain FreeRTOS task; getopt is reset the way newlib needs (upstream's reset printed a stray `invalid option -- '--'`); the HTTP server sends events only to WebSocket, `/events` and `/stream` clients (upstream also appended every event to the listening socket's send buffer, which is never drained, so PSRAM fell steadily for as long as the board was up; and into the replies of plain keep-alive HTTP connections); `get_dev_info` answers `null` while no dongle is open instead of crashing; the JSON command parsers check every token index against what jsmn parsed; and the HTTP API can be made read-only (`remote_control: false`).
+
+## Hardware
+
+- **Board:** an ESP32-P4 with the USB 2.0 High-Speed OTG port brought out, plus PSRAM. Verified: Waveshare ESP32-P4-WIFI6-POE-ETH (and its clones): USB-A host port already wired, built-in Ethernet, PoE. The ESP32-P4-ETH works too via its 4-pin USB header. Check your silicon revision with `esptool chip_id`: v1.x needs `engineering_sample: true`, v3.x must not set it.
+- **Dongle:** an RTL2832U dongle that esp_rtl_sdr supports.
+  - Nooelec NESDR SMArt v5 (R820T2): **verified**, with the driver fork: both bands, manual and automatic gain, hot-plug. Side by side with rtl_433 on Linux and the same dongle model it decodes the same 915 MHz utility meters (see [Known issues](#known-issues) for the fixes that took).
+  - RTL-SDR Blog V3 (R820T2): **verified** (2026-09-24): detected even with generic Realtek USB strings (the driver promotes an unknown 0bda:2838 dongle whose tuner answers the R820T2 chip-id probe to the V3 profile), both bands, auto gain, hot-plug.
+- **Bands:** 433.92 MHz and 915 MHz are verified with real transmitters. 315, 345 and 868 MHz are untested here (nothing in the house transmits on them) but take the same paths: the tuner's band table has one row for 310-450 MHz and one for 650-1766 MHz, and both are exercised on every hop; the decoders are upstream's and do not depend on the frequency.
+  - RTL-SDR Blog V4 (R828D): esp_rtl_sdr's primary, measured profile; not tested by this project yet.
+
+What it costs at runtime, measured on the P4 at 360 MHz with zero dropped samples:
+
+| Band | Decoding core | USB core |
+|---|---|---|
+| 915 MHz, 2048 kS/s | 89 % (33 % with `squelch`) | 45 % |
+| 433.92 MHz, 250 kS/s | not measured on its own (an eighth of the samples) | |
+
+Free internal heap ~290 KB, PSRAM ~26 MB, decoding task peak stack ~27 KB of 64 KB, chip at ~36 °C in a case. A band hop that changes sample rate restarts the stream, about a second (the driver can't change the rate while streaming).
+
+## Configuration reference
+
+The short version (the [full example](../examples/p4-wifi6-poe-eth.yaml) has the board-specific parts):
+
+```yaml
+psram:
+  mode: hex
+  speed: 200MHz
+
+time:                     # required: events carry a timestamp the HA integration checks against its clock
+  - platform: homeassistant
+
+external_components:
+  - source: github://davidcoulson/esphome-rtl433@v0.1.16
+    components: [rtl_433]
+
+rtl_433:
+  frequencies:                       # more than one: rtl_433 hops between them
+    - frequency: 433.92MHz
+      sample_rate: 250k
+      hop_interval: 30s
+      decoders: [acurite_txr, acurite_606]   # only these while on this band
+    - frequency: 915MHz
+      sample_rate: 2048k
+      hop_interval: 150s
+      decoders: [scmplus]
+  gain: 40                           # dB; leave out for the tuner's automatic gain
+  remote_control: false              # read-only HTTP API (see Security)
+  units: si                          # rtl_433 -C: native, si (default) or customary
+  # ppm_error: 0
+  # extra_args: ["-M", "noise"]      # anything else rtl_433 accepts
+```
+
+Then in Home Assistant: Settings → Devices & services → rtl_433 → add a hub with the device's IP, port `8433`, path `/ws`. Devices appear under the hub's *Add discovered devices* once they have been heard. If you are moving from an existing rtl_433 hub, copy its *Device mappings* over first (they hold things like the ×0.01 / CCF conversion on utility meters), then add the same devices under the new hub; the entity ids come back the same.
+
+Per-band sample rates are an addition to rtl_433 (upstream uses one rate for every hop): each `-s` pairs with the `-f` in the same position, as `-H` already does. The driver can't change the rate while streaming, so a hop that changes it stops and restarts the stream (about a second of samples).
+
+### All options
+
+| Key | rtl_433 | Default | Meaning |
+|---|---|---|---|
+| `port` | `-F http` | `8433` | HTTP/WebSocket API for the HA integration |
+| `frequencies` | `-f` | `433.92MHz` | One or more bands; each may set `sample_rate`, `hop_interval`, `decoders` |
+| `sample_rate` | `-s` | `250k` | 225k-300k or 900k-3.2M S/s (exactly 900k aliases to 300k and is refused) |
+| `hop_interval` | `-H` | `600s` | Time on each band |
+| `hop_on_event` | `-E hop` | `false` | Move on as soon as something decodes |
+| `gain` | `-g` | automatic | Tuner gain, dB. Omit for the tuner's AGC (recommended) |
+| `ppm_error` | `-p` | `0` | Frequency correction |
+| `bias_tee` / `digital_agc` | `-t` | unchanged | Antenna power / RTL2832 digital AGC |
+| `decoders` | (per band) | rtl_433 defaults | Decoder names or numbers |
+| `flex_decoders` | `-X` | | General-purpose decoder specs |
+| `units` | `-C` | `si` | `native`, `si`, `customary` |
+| `detector:` `fsk_detector` | `-Y auto/classic/minmax` | | FSK pulse detector |
+| `detector:` `level` / `min_level` / `min_snr` | `-Y level= / minlevel= / minsnr=` | | Detection thresholds, dB |
+| `detector:` `auto_level` | `-Y autolevel` | | Track the noise floor (also feeds HA's noise sensor) |
+| `detector:` `squelch` | `-Y squelch` | | Skip sample pieces below the noise estimate: halves the decoding CPU on a 2 MS/s band. This port judges 8 ms pieces of each block and keeps the previous piece, so short bursts survive; recommended. (Don't shrink the USB block with `-b`: that starves the ESPHome loop) |
+| `detector:` `level_estimator` | `-Y ampest/magest` | | `amplitude` or `magnitude` |
+| `detector:` `fm_filter` | `-Y filter=` | | FM low-pass cutoff |
+| `report_noise` | `-M noise:` | | Noise report interval |
+| `outputs` | `-F` | | Extra outputs, e.g. `mqtt://host:1883,retain=0` |
+| `tags` | `-K` | | Extra fields on every event |
+| `verbosity` | `-v` | `0` | rtl_433 log detail, 0-4 |
+| `extra_args` | anything | | Passed through verbatim (but not `-A`, see Known issues) |
+| `remote_control` | | `true` | `false`: the HTTP API answers queries only; every command that would change the receiver is refused |
+| `r820t2_if_mode` | | `table` | R820T2 dongles (Nooelec SMArt v5, Blog V3): how the tuner's IF filter and IF follow the sample rate. `table` is what this component was verified with (see Known issues); `vendor_fixed` (upstream esp_rtl_sdr's default: wide filter, 3.57 MHz IF at every rate) left 915 MHz nearly deaf here; `librtlsdr` is `r82xx_set_bandwidth()`'s mapping, untested |
+| `time_sync_timeout` | | `120s` | Hold rtl_433 back until the clock is set (so the first events don't carry 1970 timestamps), at most this long; `0s` to not wait |
+
+Tuning (ESP32 side):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `task_core` | the core the ESPHome loop isn't on | Core for rtl_433's decoding task. Its USB acquire thread and the driver's USB task run on the other core. |
+| `task_priority` | `5` | Decoding task priority |
+| `acquire_priority` | `6` | USB acquire thread priority |
+| `usb_task_priority` | `0` (driver default) | esp_rtl_sdr's USB task priority |
+| `usb_buffer` | driver default (~192-512 KB) | Sample ring between USB and rtl_433. At 2 MS/s the default rides out only ~50-125 ms of decoding; raise it, up to `1MB` (the driver's limit), if `dropped_samples` climbs. |
+| `log_task_stats` | `false` | Log each task's share of each core at every update (debug level) |
+
+The rtl_433 sources are compiled with `-O2` (ESPHome builds everything else for size).
+
+Diagnostic sensors (all optional, published every `update_interval`): `effective_sample_rate`, `usb_overruns`, `dropped_samples` (rtl_433 fell behind), `decoded_events`, `cpu_load_core0`, `cpu_load_core1`, `decode_stack_free` / `acquire_stack_free` (the least free stack each rtl_433 task has ever had), `heap_free`, `psram_free`.
+
+### Decoders per band
+
+`decoders` takes rtl_433's decoder names, as declared in [`rtl_433_devices.h`](../idf/rtl433_core/include/rtl_433_devices.h) (e.g. `scmplus`, `acurite_txr`, `acurite_606`), or protocol numbers as for `-R`. Unknown names are rejected when the config is validated. The set is swapped on every hop, so each band runs only the decoders it needs: fewer false decodes, less work per pulse. A band without a list uses the top-level `decoders`, or rtl_433's defaults.
+
+### Managing the radio from Home Assistant
+
+With `remote_control: true` (the default), the integration's SDR controls (frequency, sample rate, gain, ppm, hop interval) work as they do against rtl_433 on a PC: they go through rtl_433's `/cmd` endpoint to the dongle, so automations can retune it. As upstream, setting a frequency this way stops hopping and stays on that frequency until the next reboot, which restores the YAML configuration. While tuned manually, every band's decoders are active (or rtl_433's defaults, if any band uses them), since the new frequency may not be one of the bands. The integration itself (devices, events, WebSocket) works the same with `remote_control: false`; only these controls stop working.
+
+## Security
+
+- **rtl_433's HTTP/WebSocket API has no authentication**, the same as rtl_433 on a PC. Anyone who can reach port 8433 can read every decoded event, and, unless `remote_control: false`, retune or reconfigure the receiver through `/cmd`. Set `remote_control: false` unless you use the integration's SDR controls, and keep the device on a network you trust.
+- The web server behind that API is the Mongoose 6.16 that rtl_433 bundles; it parses untrusted network input. This project tracks rtl_433's upstream for updates to it.
+- `outputs` and `extra_args` go straight to rtl_433's command line, so they can enable anything rtl_433 can do (MQTT, UDP, file outputs). They only come from your YAML.
+- Protect the ESPHome side as usual: API encryption and an OTA password (the example shows both).
+- The USB driver checks a new device's descriptors (interface 0, bulk IN endpoint 0x81, sane packet size) before claiming it, and bounds every control transfer.
+
+## Known issues
+
+The USB driver, esp_rtl_sdr, started out (v0.8.0-rc3) with several problems on R820T2 dongles, found here and reported upstream: the tuner front end stuck on the FM band ([esp-rtl-sdr#25](https://github.com/hardcoreerik/esp-rtl-sdr/issues/25)), 225k-300k rates rejected ([#24](https://github.com/hardcoreerik/esp-rtl-sdr/issues/24)), no manual or automatic gain on the Nooelec, a deaf AGC, and crashes or a dead dongle after an unplug or a failed enumeration. Upstream v0.9.3 has fixes for these. The pinned fork (`v0.9.6-dc.2`) is upstream v0.9.6 plus:
+
+- **Recovery without a reboot** from a transient USB error or an unplug (the driver used to stay in FAULT), a retune that fails is rolled back, stale samples are dropped after a retune or restart, and an unlocked PLL is logged and counted.
+- **A reader-safe pull-ring flush** (`v0.9.6-dc.2`): a stream stop/start no longer rewrites the ring indices under a concurrent `read()`, which could hand stale bytes to rtl_433 after a hop restart; and `read_ex()` no longer holds the ring mutex while waiting.
+- **The R820T2 IF filter and IF per sample rate**, as the `r820t2_if_mode` option. **The 915 MHz band was nearly deaf, and more gain made it worse,** with the IF filter at librtlsdr's 2.2 MHz setting while the driver demodulated at a 3.57 MHz IF: the wanted signal sat at the edge of the filter and the image was barely rejected, which is fatal on the busy 915 MHz band once the AGC amplifies the neighbours. Setting the filter and IF per sample rate (`table`, the default here) took a Nooelec from zero utility-meter decodes in ten minutes to half of a Linux rtl_433's count with 80% of the dwell. Upstream keeps the vendor driver's fixed setting (`vendor_fixed`) and is tracking the question in [esp-rtl-sdr#53](https://github.com/hardcoreerik/esp-rtl-sdr/issues/53).
+- Upstream has no in-place sample-rate change, so a hop between bands with different rates restarts the stream (about a second).
+- Do not pass `-A` (rtl_433's pulse analyzer) in `extra_args`: it puts two full pulse buffers on the stack and overflows the decoding task the moment the first burst arrives.
+
+## Testing
+
+- **Config tests** (no hardware, no compiler): `python3 tests/config_tests.py` runs a set of YAML cases through ESPHome. Valid ones are generated with `esphome compile --only-generate` and the rtl_433 command line and setters are checked; invalid ones must fail validation with the right message.
+- **Hardware smoke test**: `python3 tests/hw_smoke.py <ip> --band 433920000:250000 --band 915000000:2048000 [--read-only] [--expect-events]` checks a running receiver over its API: dongle open, clock set before start, every band visited at its rate, frames detected, WebSocket delivering JSON, and read-only mode if expected.
+- **Compile test**: `esphome compile tests/p4-wifi6-poe-eth.yaml` builds every option.
+- **Driver**: the fork's host unit tests (`tests/scripts/run_host_tests.sh` in [esp-rtl-sdr](https://github.com/davidcoulson/esp-rtl-sdr))) check the rate quantizer against librtlsdr's arithmetic, the R820T2 band table, and the dongle profiles.
+- **Driver development**: `ESP_RTL_SDR_LOCAL_PATH=/path/to/esp_rtl_sdr esphome compile ...` builds a local driver checkout instead of the pinned one (the directory must be named `esp_rtl_sdr`).
+
+## Debugging notes
+
+The dongle and tuner setup log lines come before Ethernet is up on a cold boot, so the ESPHome dashboard's log viewer can miss them; use a serial console, or restart the device while a log client is attached (rtl_433 waits for the clock, which only arrives once Home Assistant connects). On the P4 the USB-serial/JTAG console can hang after the ROM banner while the USB host stack starts, so a real UART is more reliable. The driver's own log lines are at INFO level and need `CONFIG_LOG_DEFAULT_LEVEL_INFO` in `sdkconfig_options` to appear. rtl_433's `http://<device>:8433/cmd?cmd=get_stats` shows whether frames are being detected and decoded at all; the WebSocket at `/ws` replays recent events on connect; `log_task_stats: true` shows where the CPU goes.
