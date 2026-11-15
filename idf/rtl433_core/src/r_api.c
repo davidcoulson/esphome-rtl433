@@ -96,9 +96,10 @@ void set_center_freq(r_cfg_t *cfg, uint32_t center_freq)
 
 int set_freq_correction(r_cfg_t *cfg, int freq_correction)
 {
-    int r = sdr_set_freq_correction(cfg->dev, freq_correction, 0);
+    // no device open: start_sdr() applies it when one is
+    int r = cfg->dev ? sdr_set_freq_correction(cfg->dev, freq_correction, 0) : 0;
     if (r >= 0) {
-        // what get_ppm_error reports, and what start_sdr() applies when the input restarts
+        // the sdr event does not update it: this is what get_ppm_error reports and a restart applies
         cfg->ppm_error = freq_correction;
     }
     return r;
@@ -106,6 +107,11 @@ int set_freq_correction(r_cfg_t *cfg, int freq_correction)
 
 int set_sample_rate(r_cfg_t *cfg, uint32_t sample_rate)
 {
+    if (!cfg->dev) {
+        cfg->samp_rate = sample_rate; // no device open: start_sdr() applies it when one is
+        cfg->hop_rates = 0;           // a rate set by hand applies to every band
+        return 0;
+    }
     // cfg->samp_rate = sample_rate; // actually applied in the sdr event
     int r = sdr_set_sample_rate(cfg->dev, sample_rate, 0);
     if (r >= 0) {
@@ -144,7 +150,7 @@ void r_init_cfg(r_cfg_t *cfg)
     list_ensure_size(&cfg->output_handler, 16);
 
     // collect devices list, this should be a module
-    // (a table of pointers: copying the 388 r_device values into a local would be a 43 KB stack frame)
+    // a table of pointers: a table of r_device values would be a ~40 KB stack frame
     static r_device const *const r_devices[] = {
 #define DECL(name) &name,
             DEVICES
@@ -152,11 +158,11 @@ void r_init_cfg(r_cfg_t *cfg)
     };
 
     cfg->num_r_devices = sizeof(r_devices) / sizeof(*r_devices);
-    cfg->devices = malloc(cfg->num_r_devices * sizeof(r_device));
+    cfg->devices = malloc(cfg->num_r_devices * sizeof(*cfg->devices));
     if (!cfg->devices)
         FATAL_CALLOC("r_init_cfg()");
 
-    for (int i = 0; i < cfg->num_r_devices; i++) {
+    for (unsigned i = 0; i < cfg->num_r_devices; i++) {
         cfg->devices[i] = *r_devices[i];
         cfg->devices[i].protocol_num = i + 1;
     }
@@ -203,9 +209,9 @@ r_cfg_t *r_create_cfg(void)
 
 static void silenced_handler(struct mg_connection *nc, int ev, void *ev_data)
 {
-    (void)nc;
-    (void)ev;
-    (void)ev_data;
+    UNUSED(nc);
+    UNUSED(ev);
+    UNUSED(ev_data);
 }
 
 void r_free_cfg(r_cfg_t *cfg)
@@ -257,7 +263,7 @@ void r_free_cfg(r_cfg_t *cfg)
     free(cfg->devices);
     cfg->devices = NULL;
 
-    // mg_mgr_free() polls once more and then closes every connection through its handler, but the state
+    // mg_mgr_free() polls once more and closes every connection through its handler, but the state
     // those handlers use (outputs, the demod, cfg's timer) is freed by now: silence them first
     if (cfg->mgr) {
         for (struct mg_connection *nc = mg_next(cfg->mgr, NULL); nc != NULL; nc = mg_next(cfg->mgr, nc)) {

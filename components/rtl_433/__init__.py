@@ -95,6 +95,7 @@ R820T2_IF_MODES = {
     "librtlsdr": "CONFIG_ESP_RTL_SDR_ESP_R820T2_IF_LIBRTLSDR",
 }
 CONF_TIME_SYNC_TIMEOUT = "time_sync_timeout"
+CONF_DEAF_TIMEOUT = "deaf_timeout"
 CONF_LOG_TASK_STATS = "log_task_stats"
 CONF_DECODE_STACK_FREE = "decode_stack_free"
 CONF_ACQUIRE_STACK_FREE = "acquire_stack_free"
@@ -271,6 +272,8 @@ CONFIG_SCHEMA = cv.All(
             # Hold rtl_433 back until the clock is set, so the first events don't carry 1970 timestamps;
             # start anyway after this long (0 = don't wait)
             cv.Optional(CONF_TIME_SYNC_TIMEOUT, default="120s"): cv.positive_time_period_milliseconds,
+            # Reboot when samples flow but no frame has had a pulse for this long; 0s (the default) never does
+            cv.Optional(CONF_DEAF_TIMEOUT, default="0s"): cv.positive_time_period_milliseconds,
             # Log every task's share of each core at each update (debug level): where the CPU goes
             cv.Optional(CONF_LOG_TASK_STATS, default=False): cv.boolean,
             # Diagnostics
@@ -444,6 +447,7 @@ async def to_code(config):
         cg.add(var.set_usb_buffer(config[CONF_USB_BUFFER]))
     cg.add(var.set_remote_control(config[CONF_REMOTE_CONTROL]))
     cg.add(var.set_time_sync_timeout(config[CONF_TIME_SYNC_TIMEOUT].total_milliseconds))
+    cg.add(var.set_deaf_timeout(config[CONF_DEAF_TIMEOUT].total_milliseconds))
     for key, setter in (
         (CONF_EFFECTIVE_SAMPLE_RATE, "set_effective_sample_rate_sensor"),
         (CONF_USB_OVERRUNS, "set_usb_overruns_sensor"),

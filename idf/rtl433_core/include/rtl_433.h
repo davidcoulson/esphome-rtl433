@@ -18,9 +18,10 @@
 #define FSK_PULSE_DETECTOR_LIMIT 800000000
 
 #define MINIMAL_BUF_LENGTH      512
-// ESP32: the demod state embeds four buffers of this many samples; 4M samples would be 36 MB.
-// 256 K samples is one full acquire block (DEFAULT_BUF_LENGTH bytes = 128 K CU8 samples) with room to spare.
-#define MAXIMAL_BUF_LENGTH      (16 * 16384)
+#ifndef MAXIMAL_BUF_LENGTH
+// the demod state embeds buffers of this many samples: small targets can define a lower limit
+#define MAXIMAL_BUF_LENGTH      (256 * 16384)
+#endif
 #define SIGNAL_GRABBER_BUFFER   (12 * DEFAULT_BUF_LENGTH)
 #define MAX_FREQS               32
 

@@ -386,10 +386,9 @@ static void help_write(void)
     exit(0);
 }
 
-#ifdef ESP_RTL_SDR
-// newlib's getopt only fully re-initialises (its internal scan position too) when optind is 0; with
-// optind = 1 the first call re-reads argv[1][0] ('-') as an option character and prints
-// "invalid option -- `--'". glibc treats 1 as a full reset, which is why upstream uses it.
+#ifdef __NEWLIB__
+// newlib and picolibc only fully re-initialise getopt (its scan position too) with optind = 0;
+// with 1 the first call re-reads the '-' of argv[1] as an option character
 #define GETOPT_RESET 0
 #else
 #define GETOPT_RESET 1
@@ -1386,9 +1385,9 @@ static int start_sdr(r_cfg_t *cfg)
     if (r < 0) {
         return -1; // exit(2);
     }
-    // A reopened device (a replug, a watchdog restart) often comes back at the same rate and frequency,
-    // so process_sdr_frame() sees no change and flushes nothing: start the filters, the pulse detector
-    // and the squelch from scratch rather than carry a half-seen pulse across the gap
+    // A reopened device often comes back at the same rate and frequency, so process_sdr_frame() sees
+    // no change and resets nothing: start the filters and the pulse detector from scratch instead of
+    // carrying a half-seen pulse across the gap
     reset_sdr_flow(cfg);
     cfg->dev_info = sdr_get_dev_info(cfg->dev);
     cfg->demod->sample_size = sdr_get_sample_size(cfg->dev);
@@ -1426,7 +1425,9 @@ static int start_sdr(r_cfg_t *cfg)
         print_log(LOG_NOTICE, "Input", "Reading samples in async mode...");
     }
 
-    sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1); // not center_frequency: that is the last band that delivered data, stale after a failed hop or a retune made while the dongle was away
+    // not center_frequency: that is the last frequency that delivered data, stale after a retune or a hop
+    // made while the device was away
+    sdr_set_center_freq(cfg->dev, cfg->frequency[cfg->frequency_index], 1); // always verbose
 
     r = sdr_start(cfg->dev, acquire_callback, (void *)get_mgr(cfg),
             DEFAULT_ASYNC_BUF_NUMBER, cfg->out_block_size);

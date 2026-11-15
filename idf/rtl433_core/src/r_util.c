@@ -24,8 +24,8 @@ void get_time_now(struct timeval *tv)
 }
 
 #ifdef ESP_PLATFORM
-/* ESP port: the ESP-IDF libc's strftime("%z") prints +0000 even with TZ set (localtime_r does
-   apply the zone), so events went out as local time labelled Z. Derive the offset instead. */
+/* The ESP-IDF libc's strftime("%z") prints +0000 even with TZ set (localtime_r does apply the zone),
+   so local times went out labelled Z. Derive the offset from localtime_r and gmtime_r instead. */
 static void format_tz_offset(char *buf, size_t len, time_t t, struct tm const *lt)
 {
     struct tm g;

@@ -55,6 +55,7 @@ CASES = [
         ("args", ["-D", "restart"]),
         ("code", "set_remote_control(true)"),
         ("code", "set_time_sync_timeout(120000)"),
+        ("code", "set_deaf_timeout(0)"),
     ]),
     ("two bands, per-band rate/hop/decoders", {
         "frequencies": [
@@ -95,7 +96,7 @@ CASES = [
         ("args", ["-C", "customary"]),
     ]),
     ("health sensors + task stats", {
-        "log_task_stats": True, "time_sync_timeout": "0s",
+        "log_task_stats": True, "time_sync_timeout": "0s", "deaf_timeout": "15min",
         "decode_stack_free": {"name": "Decode Stack Free"},
         "acquire_stack_free": {"name": "Acquire Stack Free"},
         "heap_free": {"name": "Heap Free"}, "psram_free": {"name": "PSRAM Free"},
@@ -106,6 +107,7 @@ CASES = [
         ("code", "set_heap_free_sensor("),
         ("code", "set_psram_free_sensor("),
         ("code", "set_time_sync_timeout(0)"),
+        ("code", "set_deaf_timeout(900000)"),
         ("define", "USE_RTL433_TASK_STATS"),
         ("define", "USE_RTL433_CPU_LOAD"),
     ]),

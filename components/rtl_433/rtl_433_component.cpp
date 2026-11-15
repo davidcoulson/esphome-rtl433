@@ -9,6 +9,7 @@
 #include <esp_timer.h>
 
 #include "esphome/components/network/util.h"
+#include "esphome/core/application.h"
 #include "esphome/core/log.h"
 
 #include "rtl433_core.h"
@@ -165,6 +166,17 @@ void Rtl433Component::check_liveness_(bool streaming) {
   if (frames != this->last_frames_ || !streaming) {  // no stream (no dongle, restarting): nothing to take
     this->last_frames_ = frames;
     this->last_frames_ms_ = now;
+  }
+  // Deaf radio: samples flow and frames are taken, but none has had a pulse in it for this long. Seen once
+  // after a crash mid-OTA left the dongle wedged (every frame noise, no hops, 2026-11-14); a reboot cleared it.
+  uint32_t pulses = rtl433_port_pulse_frames;
+  if (pulses != this->last_pulse_frames_ || !streaming || frames == 0) {
+    this->last_pulse_frames_ = pulses;
+    this->last_pulse_ms_ = now;
+  } else if (this->deaf_timeout_ms_ > 0 && now - this->last_pulse_ms_ > this->deaf_timeout_ms_) {
+    ESP_LOGE(TAG, "No OOK or FSK frames for %us while samples flow: the radio is deaf, rebooting",
+             static_cast<unsigned>((now - this->last_pulse_ms_) / 1000));
+    App.safe_reboot();
   }
   bool loop_stalled = now - this->last_loops_ms_ > STALL_MS;
   bool frames_stalled = now - this->last_frames_ms_ > STALL_MS;

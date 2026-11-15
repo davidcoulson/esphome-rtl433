@@ -28,6 +28,7 @@ class Rtl433Component : public PollingComponent {
   void set_usb_buffer(uint32_t bytes) { this->usb_buffer_ = bytes; }
   void set_remote_control(bool on) { this->remote_control_ = on; }
   void set_time_sync_timeout(uint32_t ms) { this->time_sync_timeout_ms_ = ms; }
+  void set_deaf_timeout(uint32_t ms) { this->deaf_timeout_ms_ = ms; }
 
   void set_effective_sample_rate_sensor(sensor::Sensor *s) { this->effective_sample_rate_sensor_ = s; }
   void set_usb_overruns_sensor(sensor::Sensor *s) { this->usb_overruns_sensor_ = s; }
@@ -58,6 +59,8 @@ class Rtl433Component : public PollingComponent {
   std::string command_line_;
   bool remote_control_{true};
   uint32_t time_sync_timeout_ms_{120000};
+  uint32_t deaf_timeout_ms_{0};  // 0: off
+  uint32_t last_pulse_frames_{0}, last_pulse_ms_{0};
   uint32_t network_up_ms_{0};
   bool waiting_logged_{false};
   std::vector<std::pair<int, std::string>> band_decoders_;
