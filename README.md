@@ -65,7 +65,7 @@ ethernet:                    # ESP32-P4-WIFI6-POE-ETH and ESP32-P4-ETH
   phy_addr: 1
 
 external_components:
-  - source: github://davidcoulson/esphome-rtl433@v0.1.16
+  - source: github://davidcoulson/esphome-rtl433@v0.1.17
     components: [rtl_433]
 
 rtl_433:
