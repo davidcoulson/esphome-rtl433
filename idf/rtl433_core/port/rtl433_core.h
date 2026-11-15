@@ -25,6 +25,7 @@ extern volatile unsigned rtl433_port_acquire_stack_free;
 extern volatile unsigned rtl433_port_decode_stack_free;  // the decoding task's own, likewise
 extern volatile uint32_t rtl433_port_main_loops;         // every pass of rtl_433's main loop (>= 2/s)
 extern volatile uint32_t rtl433_port_frames;             // frames the demodulator has taken
+extern volatile uint32_t rtl433_port_pulse_frames;       // of those, frames with OOK or FSK pulses
 
 // Snapshot of the USB stream counters; false while no dongle is open
 struct rtl433_usb_stats {

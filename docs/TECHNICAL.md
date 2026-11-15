@@ -103,6 +103,7 @@ Per-band sample rates are an addition to rtl_433 (upstream uses one rate for eve
 | `remote_control` | | `true` | `false`: the HTTP API answers queries only; every command that would change the receiver is refused |
 | `r820t2_if_mode` | | `table` | R820T2 dongles (Nooelec SMArt v5, Blog V3): how the tuner's IF filter and IF follow the sample rate. `table` is what this component was verified with (see Known issues); `vendor_fixed` (upstream esp_rtl_sdr's default: wide filter, 3.57 MHz IF at every rate) left 915 MHz nearly deaf here; `librtlsdr` is `r82xx_set_bandwidth()`'s mapping, untested |
 | `time_sync_timeout` | | `120s` | Hold rtl_433 back until the clock is set (so the first events don't carry 1970 timestamps), at most this long; `0s` to not wait |
+| `deaf_timeout` | | `0s` (off) | Reboot when the USB stream delivers samples but no frame has had an OOK or FSK pulse for this long (a wedged dongle hears only noise). Set it well above the longest quiet spell your bands have, e.g. `15min` |
 
 Tuning (ESP32 side):
 
